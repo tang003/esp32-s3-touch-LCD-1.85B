@@ -4,9 +4,11 @@
 
 [Glimpse 官网](https://maler.top/) · [2026-09-16 近期更新](docs/UPDATES_2026-09-16.md) · [Web 调试入口](https://maler.top/moto-gps/ride.html)
 
+本仓库基于 [MOTO GPS 原项目](https://github.com/mx3353672833-debug/moto-gps-waveshare) 适配 Waveshare ESP32-S3-Touch-LCD-1.85B，并增加高德电动车路线模式。原项目作者与许可见下文。
+
 ![MOTO GPS 圆屏摩托车导航终端](assets/brand/moto-gps-cover.png)
 
-**板型进展：**ESP32 固件新增 **Waveshare ESP32-S3-Touch-LCD-1.85B** 配置，默认选用 360×360 屏幕与 16 MB Flash；原 **ESP32-S3-Touch-AMOLED-1.75C** 仍可选择。1.85B 已刷入实机，串口确认屏幕、触摸、蓝牙和惯性传感器初始化，画面与触摸交互仍待实物确认；编译及板型切换步骤见 [ESP32 固件说明](platforms/esp32/README.md)。
+**板型进展：**ESP32 固件新增 **Waveshare ESP32-S3-Touch-LCD-1.85B** 配置，默认选用 360×360 屏幕与 16 MB Flash；原 **ESP32-S3-Touch-AMOLED-1.75C** 仍可选择。1.85B 已刷入实机，屏幕、触摸、蓝牙与 iPhone 演示导航已确认可用；滑动灵敏度仍待优化。编译及板型切换步骤见 [ESP32 固件说明](platforms/esp32/README.md)。
 
 **想自己做一台 1.75C 微雪版？从 [购买、固件烧录与 iPhone 安装教程](docs/WAVESHARE_DIY_GUIDE.md)开始。** 这份 DIY 教程专指 1.75C，不适用于 1.85B 的接线、容量与电源操作。
 
@@ -16,8 +18,8 @@
 
 **欢迎一起共创 Glimpse。** 如果你基于这个项目做出了安卓 App，希望你愿意把源码也公开到 GitHub，让其他人能够学习、使用并一起维护。可以先在 [Issues](https://github.com/mx3353672833-debug/moto-gps-waveshare/issues) 聊想做的功能，再通过 Pull Request 贡献代码、修复或文档；请附上构建说明和已测试的机型。我们会保留贡献者署名，相关代码沿用项目现有许可。具体参与方式见 [安卓共创邀请](docs/ANDROID_AI_GUIDE.md#一起开发安卓版本)。
 
-当前提供源码自行编译安装；尚无仓库发布的预编译固件、App Store / TestFlight 下载入口。
-**iOS 0.3.0（5）已加入发布准备改动，尚未通过 TestFlight 分发。**
+当前提供源码和 [GitHub Actions 构建的未签名 iPhone IPA](docs/IOS_SIDELOAD.md)；尚无 App Store / TestFlight 下载入口。
+**当前 iOS 0.3.1（6）提供未签名 IPA，需要使用自己的 Apple 账号签名安装；尚未通过 TestFlight 分发。**
 教程包含设备选型、原厂备份、Xcode 个人签名、配对、演示与常见问题。
 
 **作者：Maler X · 署名 / 非商业使用 · 实验性样机**
@@ -25,8 +27,8 @@
 一块装在车把上的圆屏，一个放在包里的 iPhone。手机负责定位、搜索与路线计算，
 圆屏通过蓝牙显示简洁导航、速度、相对航向，并遥控 Apple Music。
 
-已验证的完整导航样机基于 **Waveshare ESP32-S3-Touch-AMOLED-1.75C**；仓库还包含已上板启动、
-但尚未完成画面与导航验收的 **ESP32-S3-Touch-LCD-1.85B** 固件配置，以及 iOS App、路线网关和网页调试工具。
+原项目验证的完整导航样机基于 **Waveshare ESP32-S3-Touch-AMOLED-1.75C**；本仓库的
+**ESP32-S3-Touch-LCD-1.85B** 已完成实机显示、触摸、蓝牙与驾车路线演示。电动车路线已实现并完成构建，仍需在新版 iPhone App 上实地验证。
 
 仓库同时收录自研电路板、V3 外壳、加工审阅资料和完整产品技术方案。
 当前运行版本仍是微雪成品板 + iPhone；自研部分按历史工程候选归档，具体版本见下方资料入口。
@@ -290,8 +292,8 @@ iPhone 提供网络和定位，圆屏通过 BLE 连接手机。当前后台连�
 ### 1. 获取源码
 
 ```sh
-git clone --recurse-submodules https://github.com/mx3353672833-debug/moto-gps-waveshare.git
-cd moto-gps-waveshare
+git clone --recurse-submodules https://github.com/tang003/esp32-s3-touch-LCD-1.85B.git
+cd esp32-s3-touch-LCD-1.85B
 ```
 
 上述命令会同时获取固定版本的 LVGL。使用 GitHub 的 Download ZIP 时，
@@ -495,7 +497,7 @@ node scripts/offline_map/validate_jinan_sqlite.mjs
 这些结果验证代码和数据路径，不代表真实道路、长时间锁屏或续航验收完成。
 本轮范围见[近期更新](docs/UPDATES_2026-09-16.md)；首次公开快照的历史结果保留在
 [发布检查记录](docs/RELEASE_CHECKS.md)，提交后的检查结果见
-[GitHub Actions](https://github.com/mx3353672833-debug/moto-gps-waveshare/actions/workflows/checks.yml)。
+[GitHub Actions](https://github.com/tang003/esp32-s3-touch-LCD-1.85B/actions/workflows/checks.yml)。
 
 ### 从哪里开始修改
 

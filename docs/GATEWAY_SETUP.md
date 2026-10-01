@@ -37,8 +37,8 @@ GitHub Pages 只托管静态内容，不能运行本 Node 网关。
 在服务器当前用户目录执行，后端测试不需要初始化 LVGL：
 
 ```sh
-git clone https://github.com/mx3353672833-debug/moto-gps-waveshare.git
-cd moto-gps-waveshare
+git clone https://github.com/tang003/esp32-s3-touch-LCD-1.85B.git
+cd esp32-s3-touch-LCD-1.85B
 node --version
 npm --prefix backend ci
 npm --prefix backend test

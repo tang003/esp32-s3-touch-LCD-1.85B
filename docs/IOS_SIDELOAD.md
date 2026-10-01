@@ -6,9 +6,8 @@
 本项目提供 **未签名 IPA**，由安装工具使用你自己的 Apple 账号重新签名。
 它不是 App Store / TestFlight 安装包，也不能直接点开安装。
 
-[下载侧载测试版](https://github.com/mx3353672833-debug/moto-gps-waveshare/releases/tag/v0.3.1-sideload)
-
-下载 `MOTO-GPS-0.3.1-6-unsigned.ipa`，`SHA256SUMS.txt` 用于核对文件完整性。
+[下载本仓库的 iPhone 构建结果](https://github.com/tang003/esp32-s3-touch-LCD-1.85B/actions/runs/36805187281)：在页面下方 Artifacts 下载 `MOTO-GPS-unsigned-IPA`，解压后得到 IPA 与 `SHA256SUMS.txt`。
+此构建包含高德电动车路线模式；原项目的旧版 Release 不包含本仓库的新增功能。
 源码和构建方式公开在本仓库；不要向作者或他人提供 Apple 账号密码、签名证书或配对文件。
 
 ## 通过 SideStore 安装
