@@ -935,6 +935,10 @@ extern "C" esp_err_t board_port_init(void) {
 
 extern "C" lv_display_t* board_port_get_display(void) { return display; }
 
+extern "C" i2c_master_bus_handle_t board_port_i2c_get_handle(void) {
+  return bsp_i2c_get_handle();
+}
+
 extern "C" esp_err_t board_port_reveal_display(void) {
   if (panel == nullptr || display == nullptr) {
     return ESP_ERR_INVALID_STATE;
@@ -973,6 +977,8 @@ extern "C" bool board_port_power_button_pressed(void) {
   // inverter stage makes SYS_OUT high for the duration of a physical press.
   return gpio_get_level(kPowerButtonGpio) != 0;
 }
+
+extern "C" bool board_port_has_power_button(void) { return true; }
 
 extern "C" esp_err_t board_port_power_off(void) {
   if (pmic == nullptr) {

@@ -208,9 +208,11 @@ extern "C" void app_main(void) {
                   nullptr) != pdPASS) {
     ESP_LOGW(kTag, "navigation demo task could not start");
   }
-  if (xTaskCreate(power_button_task, "moto_power", 3'072, nullptr, 3,
-                  nullptr) != pdPASS) {
-    ESP_LOGW(kTag, "PWR long-hold task could not start");
+  if (board_port_has_power_button()) {
+    if (xTaskCreate(power_button_task, "moto_power", 3'072, nullptr, 3,
+                    nullptr) != pdPASS) {
+      ESP_LOGW(kTag, "PWR long-hold task could not start");
+    }
   }
 
   ESP_LOGI(kTag,

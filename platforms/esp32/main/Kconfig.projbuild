@@ -1,0 +1,18 @@
+menu "MOTO GPS board"
+
+    choice MOTO_BOARD
+        prompt "Waveshare display board"
+        default MOTO_BOARD_WAVESHARE_1_85B
+        help
+            Choose the exact Waveshare board before building. The LCD,
+            touch controller, GPIO assignments and flash capacity differ.
+
+        config MOTO_BOARD_WAVESHARE_1_85B
+            bool "ESP32-S3-Touch-LCD-1.85B (360 x 360, 16 MB flash)"
+
+        config MOTO_BOARD_WAVESHARE_1_75C
+            bool "ESP32-S3-Touch-AMOLED-1.75C (466 x 466, 32 MB flash)"
+
+    endchoice
+
+endmenu

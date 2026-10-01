@@ -9,6 +9,7 @@
 | --- | --- | --- |
 | LVGL | `third_party/lvgl` 子模块，提交 `85aa60d18b3d5e5588d7b247abf90198f07c8a63` | MIT；见子模块 `LICENCE.txt` 及 `LICENSES/LVGL-MIT.txt` |
 | Waveshare BSP / CO5300 初始化 | Component Registry `waveshare/esp32_s3_touch_amoled_1_75c` 3.0.0；板级派生文件 `platforms/esp32/main/board_port_waveshare_1_75c.cpp` | Apache-2.0；见 `LICENSES/Waveshare-Apache-2.0.txt`，该派生文件保留 Apache-2.0 |
+| Waveshare 1.85B / ST77916 两版初始化参数 | [ESP32-S3-Touch-LCD-1.85B 官方 BSP](https://github.com/waveshareteam/ESP32-S3-Touch-LCD-1.85B)；板级派生文件 `platforms/esp32/main/board_port_waveshare_1_85b.cpp` | Apache-2.0；见 `LICENSES/Waveshare-Apache-2.0.txt`，该派生文件保留 Apache-2.0 |
 | Source Han Sans SC 字体子集 | `shared/nav_ui/assets/moto_font_nav_16.c`，生成自 LVGL 工具目录的字体 | SIL OFL 1.1；见 `LICENSES/SourceHanSansSC-OFL.txt` |
 | Montserrat 内置字体 | LVGL 的内置字体资源 | SIL OFL 1.1；见 `LICENSES/Montserrat-OFL.txt` |
 | OpenStreetMap 数据 / 派生数据库 | `shared/offline_map/jinan-v1.sqlite`、其 SQL/manifest；`shared/demo_fixture` 中的路线/道路/建筑几何；生成 C++ / Swift 常量中的地图数据 | ODbL 1.0，© OpenStreetMap contributors |

@@ -8,7 +8,9 @@
 
 ![MOTO GPS round-display motorcycle navigation terminal](assets/brand/moto-gps-cover.png)
 
-**Want to build the Waveshare edition yourself? Start with the [buying, firmware flashing and iPhone installation guide](docs/WAVESHARE_DIY_GUIDE.en.md).**
+**Board support update:** The ESP32 firmware now has a **Waveshare ESP32-S3-Touch-LCD-1.85B** configuration, selected by default for its 360×360 display and 16 MB Flash. The original **ESP32-S3-Touch-AMOLED-1.75C** remains selectable. The 1.85B has been flashed to hardware; serial logs confirm display, touch, BLE and IMU initialization. Visual and touch interaction still need physical confirmation. See the [ESP32 firmware notes](platforms/esp32/README.en.md) for build and board-selection steps.
+
+**Want to build a 1.75C Waveshare edition yourself? Start with the [buying, firmware flashing and iPhone installation guide](docs/WAVESHARE_DIY_GUIDE.en.md).** This DIY guide is specific to the 1.75C; its wiring, flash size and power instructions do not apply to the 1.85B.
 
 [Features and user manual](docs/USER_MANUAL.en.md) · [Live navigation gateway configuration](docs/GATEWAY_SETUP.en.md)
 
@@ -33,8 +35,9 @@ A round display on the handlebar, an iPhone in your bag. The phone handles posit
 route calculation, while the round display shows terse navigation, speed and relative heading over
 Bluetooth and controls Apple Music.
 
-The project is built on the **Waveshare ESP32-S3-Touch-AMOLED-1.75C** and includes round-display
-firmware, an iOS app, a route gateway and a web debugging tool.
+The fully verified navigation prototype is built on the **Waveshare ESP32-S3-Touch-AMOLED-1.75C**. The repository also
+contains an **ESP32-S3-Touch-LCD-1.85B** firmware configuration that boots on hardware but still awaits visual and navigation acceptance, an iOS app, a route gateway
+and a web debugging tool.
 
 The repository also collects the in-house circuit board, the V3 enclosure, manufacturing review
 material and the complete technical proposal.
@@ -90,7 +93,7 @@ prototyping has resumed or production acceptance has been completed.
 | Grey roads / buildings | Surrounding OSM / Protomaps maps load online by default; city, district and route-corridor downloads, with the bundled Jinan map retained as a fallback |
 | Speedometer / heading | Phone positioning provides speed and direction of travel; the on-board QMI8658 assists with relative turning |
 | Music | Apple Music previous track, play/pause, next track |
-| Animation / touch | Black-and-white logo fade in and out, connection-state transitions, swipe page changes, auto-hiding page dots, long-press PWR to power off |
+| Animation / touch | Black-and-white logo fade in and out, connection-state transitions, swipe page changes and auto-hiding page dots; software power-off by holding PWR applies only to the 1.75C |
 | Demo | Near Building D of the Jinan Big Data Industry Base → near Inspur headquarters; online requests and the OSM offline fallback are explicitly distinguished |
 
 ## Feature details
@@ -98,7 +101,8 @@ prototyping has resumed or production acceptance has been completed.
 ### Round-display navigation: see the next junction clearly
 
 The navigation page is black-based, with the white route and turn prompts as the focus of the
-screen. In the 466×466 round display area, every element has a definite meaning:
+screen. The verified 1.75C uses 466×466, while the new 1.85B uses 360×360. In the round display
+area, every element has a definite meaning:
 
 | Element on screen | What it expresses |
 | --- | --- |
@@ -124,11 +128,12 @@ iPhone preview map.
 
 ### Place search and route selection
 
-The iPhone app uses AMap place search and the standard driving route service. Searches carry the
+The iPhone app uses AMap place search and lets riders choose driving or electric-bike routes on the route screen. Searches carry the
 phone's current position and prefer nearby, more relevant places. In Jinan you can start a search
 with a keyword such as "Olympic Sports Center", and you can also enter a place elsewhere together
 with its city name.
-These are standard driving routes and do not guarantee avoidance of motorcycle-restricted roads.
+Standard driving routes do not guarantee avoidance of motorcycle-restricted roads. Electric-bike
+routes use AMap's electric-bike endpoint. The installed older IPA needs rebuilding to expose this choice.
 
 Search and route selection work like this:
 
@@ -146,8 +151,9 @@ Search and route selection work like this:
 
 The route confirmation page shows the origin, the destination and the whole route. The selected
 route is highlighted and the other candidates are drawn in lighter colours.
-The cards below list each route's distance, estimated time and a per-segment traffic summary, such
-as "traffic flowing" or "slower on part of the route".
+The cards below list each route's distance and estimated time. Driving routes also show a
+per-segment traffic summary, such as "traffic flowing" or "slower on part of the route";
+electric-bike routes do not include these traffic segments.
 Tapping a card switches plan; confirm and then tap "Start navigation".
 
 Starting hands the selected route to the navigation core; if the origin has moved noticeably since
@@ -267,8 +273,9 @@ as planning starts and the route arrives.
   music page is available according to the phone's capabilities.
 - Dots at the bottom identify the current page and hide automatically after five seconds.
 - The dots reappear after a touch or a page change.
-- Holding the side PWR button for about three seconds shows the power-off screen and requests
-  shutdown from the AXP2101; the USB-powered case also has deep-sleep handling.
+- On the 1.75C only, holding the side PWR button for about three seconds shows the power-off screen
+  and requests shutdown from the AXP2101; the USB-powered case also has deep-sleep handling. The
+  1.85B PWR button controls the board's hardware power.
 
 ### Demo navigation
 
@@ -304,8 +311,8 @@ After the first install and configuration, a navigation session goes in this ord
    display shows the current section and the next action.
 6. When stopped you can swipe through the speedometer, heading and music pages and change tracks as
    needed.
-7. On arrival check the arrival state and end navigation on the phone; when putting the bike away,
-   hold PWR on the round display to power it off.
+7. On arrival check the arrival state and end navigation on the phone. The 1.75C supports software
+   power-off by holding PWR; operate the 1.85B according to its board power controls.
 
 The iPhone provides network access and positioning, and the round display connects to the phone over
 BLE. Background connection reliability is still being verified, so first complete screen lock,
@@ -317,9 +324,11 @@ against a mature navigation app.
 
 ### Device hardware
 
+The table describes the verified 1.75C prototype. See the [ESP32 firmware notes](platforms/esp32/README.en.md) for the 1.85B hardware specifications.
+
 | Item | Currently supported |
 | --- | --- |
-| Development board | Waveshare ESP32-S3-Touch-AMOLED-1.75C |
+| Development board | Full navigation prototype: Waveshare ESP32-S3-Touch-AMOLED-1.75C; boots on hardware, interaction pending: ESP32-S3-Touch-LCD-1.85B |
 | MCU | ESP32-S3 |
 | Storage | 32 MB Flash, 8 MB PSRAM |
 | Display | 1.75-inch round AMOLED, 466×466 |
@@ -339,7 +348,7 @@ board model before flashing; board-level connections and firmware steps are in t
 | Purpose | Environment |
 | --- | --- |
 | iPhone app | iOS 17+; Mac, Xcode 16+ / Swift 6 toolchain, XcodeGen |
-| Round-display firmware | ESP-IDF **5.5.5**, Waveshare BSP **3.0.0** |
+| Round-display firmware | ESP-IDF **5.5.5**; the 1.75C uses Waveshare BSP **3.0.0**, while the 1.85B uses a separate board port (boots on hardware, interaction pending) |
 | Shared UI | LVGL at the **pinned commit for 9.5.0** |
 | Route gateway | Node.js 20+; Node.js 24+ recommended to run the configuration examples in this document |
 | C++ tests | CMake, a compiler with C++17 support |

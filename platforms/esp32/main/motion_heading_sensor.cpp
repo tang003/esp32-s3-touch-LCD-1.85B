@@ -1,10 +1,10 @@
-#include "motion_heading_sensor.h"
+#include "board_port.h"
 #include "motion_heading_axis.hpp"
+#include "motion_heading_sensor.h"
 
 #include <algorithm>
 #include <cmath>
 
-#include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -95,9 +95,14 @@ void MotionHeadingSensor::task_entry(void* context) {
 }
 
 void MotionHeadingSensor::run() {
+  i2c_master_bus_handle_t const i2c_bus = board_port_i2c_get_handle();
+  if (i2c_bus == nullptr) {
+    ESP_LOGW(kTag, "QMI8658 I2C bus unavailable; using phone course only");
+    return;
+  }
   qmi8658_dev_t device{};
   const esp_err_t init = qmi8658_init(
-      &device, bsp_i2c_get_handle(), QMI8658_ADDRESS_HIGH);
+      &device, i2c_bus, QMI8658_ADDRESS_HIGH);
   if (init != ESP_OK) {
     ESP_LOGW(kTag, "QMI8658 unavailable; using phone course only: %s",
              esp_err_to_name(init));

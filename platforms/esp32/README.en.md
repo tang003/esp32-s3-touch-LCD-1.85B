@@ -2,18 +2,36 @@
 
 > English edition of the Chinese document. The Chinese file is authoritative if the two differ.
 
-# Waveshare ESP32-S3-Touch-AMOLED-1.75C firmware
+# MOTO GPS Waveshare ESP32-S3 firmware
 
-For a first flash see the [complete Waveshare edition DIY guide](../../docs/WAVESHARE_DIY_GUIDE.en.md),
-and for operation once installed see the [user manual](../../docs/USER_MANUAL.en.md).
+This directory supports two boards. The default configuration targets the user's
+**ESP32-S3-Touch-LCD-1.85B**. Check the full model name before building: the display,
+touch controller and flash capacity differ.
+The 1.85B firmware has been flashed to the physical board. Serial logs confirm
+display, touch, BLE advertising and QMI8658 initialization; no further draw-buffer
+memory errors appeared after the fix. Visual output, touch operation and phone
+connection still need physical acceptance.
 
-Applies only to the **1.75C**: CO5300 QSPI, CST9217, 466×466, 32 MB Flash, 8 MB PSRAM.
-It uses ESP-IDF **5.5.5**, BSP **3.0.0** and the pinned LVGL submodule in the repository root.
+| Board | Display / touch | Resolution | Flash | PSRAM |
+| --- | --- | ---: | ---: | ---: |
+| ESP32-S3-Touch-LCD-1.85B (default) | ST77916 QSPI / CST816S | 360×360 | 16 MB | 8 MB Octal |
+| ESP32-S3-Touch-AMOLED-1.75C | CO5300 QSPI / CST9217 | 466×466 | 32 MB | 8 MB Octal |
+
+Use ESP-IDF **5.5.5** and the pinned LVGL submodule in the repository root. The existing
+[complete Waveshare edition DIY guide](../../docs/WAVESHARE_DIY_GUIDE.en.md) and
+[user manual](../../docs/USER_MANUAL.en.md) describe the **1.75C**. Their pinout, backup size,
+and power-button instructions do not apply to the 1.85B.
 
 ## Build without flashing the board
 
-First prepare and activate an ESP-IDF 5.5.5 environment following Espressif's installation
-instructions, then run this in the repository root:
+Prepare and activate an ESP-IDF 5.5.5 environment following Espressif's instructions. A fresh
+configuration selects **1.85B / 16 MB**. For a 1.75C, first run
+`idf.py -C platforms/esp32 menuconfig`, choose 1.75C under `MOTO GPS board`, and set the flash
+size to **32 MB** under `Serial flasher config`. When switching back to the 1.85B, restore
+**16 MB**. An existing `sdkconfig` retains the previous selection; `sdkconfig.defaults` only
+supplies the initial defaults.
+
+Then run this in the repository root:
 
 ```sh
 git submodule update --init --recursive
@@ -28,26 +46,29 @@ an absolute path, do not commit your personal paths back to the repository. Do n
 
 ## Backup and flashing
 
-Flashing replaces the factory application. First confirm the exact board model, USB serial port, Flash
-capacity and encryption/secure boot state, and save a complete factory backup yourself; a backup may
-contain device credentials, so **do not upload it to GitHub**.
-The PORT below is a placeholder, replace it with the actual USB serial port; the commands need the
-Python environment of an activated IDF.
+Flashing replaces the factory application and requires the device owner's explicit approval. First
+confirm the exact model, USB serial port, flash capacity and encryption/secure boot state, then save
+a complete factory backup outside the repository. A backup may contain device credentials, so
+**do not upload it to GitHub**. The connected 1.85B has already had a 16 MB full-flash backup
+saved locally under `E:\Projects\esp32\device-backups\`; back up any other device separately.
+
+PORT and BACKUP_FILE below are placeholders for the actual USB serial port and an out-of-repository
+backup path; the commands need the Python environment of an activated IDF.
 
 ```sh
 python -m esptool --chip esp32s3 --port PORT flash_id
 python -m esptool --chip esp32s3 --port PORT get_security_info
-mkdir -p backups
-# Only for boards confirmed to be 32 MB with Flash encryption/secure boot not enabled:
-python -m esptool --chip esp32s3 --port PORT read_flash 0 0x2000000 backups/waveshare-original.bin
+# Only for a 1.85B confirmed to be 16 MB with Flash encryption/secure boot disabled:
+python -m esptool --chip esp32s3 --port PORT read_flash 0 0x1000000 BACKUP_FILE
+# For a 1.75C confirmed to be 32 MB, change the read length to 0x2000000.
 ```
 
 The syntax above corresponds to esptool 4.x in an ESP-IDF 5.5.5 environment. If you use esptool 5.x
 yourself, the subcommands become `flash-id` / `get-security-info` / `read-flash`; rely on that version's
 `--help`.
-Stop if the security state, capacity or model does not match; the backup file should be 33,554,432
-bytes, and save the check value separately.
-Only after the backup succeeds and you accept overwriting the factory firmware, run:
+Stop if the security state, capacity or model does not match. The backup must be **16,777,216 bytes**
+for a 1.85B or **33,554,432 bytes** for a 1.75C; save a checksum separately. Run the following
+only after receiving explicit approval to flash:
 
 ```sh
 idf.py -C platforms/esp32 -p PORT flash monitor
@@ -64,17 +85,23 @@ Bluetooth pairing in the iPhone.
   the phone to select a route and does not draw an empty route as `0 m`.
 - Swipe left and right to change pages; the page dots hide after five seconds. Whether the music page
   is available depends on the capabilities the phone declares.
-- Holding PWR for about three seconds requests shutdown from the AXP2101; on USB power there is a
-  deep-sleep fallback. Different power supply combinations still need to be measured.
+- On the 1.75C, holding PWR for about three seconds requests shutdown from the AXP2101; on USB
+  power there is a deep-sleep fallback. The 1.85B's PWR is a hardware power button and does not
+  use this AXP2101 behavior.
 - The QMI8658 relative angular rate assists turning; the heading while moving is anchored by phone
   positioning, and no absolute north reference at rest is provided.
-- PSRAM double buffering and CO5300 TE synchronisation are used to reduce tearing; the target tick is
-  not a guarantee of the measured sustained frame rate.
+- On the 1.75C, PSRAM double buffering and CO5300 TE synchronisation reduce tearing; the target
+  tick is not a guarantee of the measured sustained frame rate.
+- The 1.85B uses one 10-row internal draw buffer. A 50-row PSRAM buffer caused SPI temporary DMA
+  memory allocation failures on the physical board.
 
-Key pins: QSPI D0–D3 are GPIO4–7; SCLK38, CS12, RESET1, TE13; I2C SDA15/SCL14;
+1.85B key pins: LCD QSPI D0–D3 are GPIO46/45/42/41, PCLK40, CS21, RESET3, backlight5;
+I2C SDA11/SCL10, touch INT4/RESET1.
+1.75C key pins: QSPI D0–D3 are GPIO4–7, SCLK38, CS12, RESET1, TE13; I2C SDA15/SCL14;
 touch INT11/RESET2. Do not treat these pins as free GPIOs you can connect to anything.
 
-Upstream: [Waveshare official project](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75C),
+Upstream: [Waveshare 1.85B documentation](https://docs.waveshare.com/ESP32-S3-Touch-LCD-1.85B),
+[Waveshare 1.75C official project](https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.75C),
 [Waveshare BSP](https://github.com/waveshareteam/Waveshare-ESP32-components).
 For the known background disconnection and route issues see `docs/KNOWN_ISSUES.md` in the repository
 root. A successful build does not mean riding acceptance has passed.

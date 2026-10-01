@@ -6,6 +6,7 @@ build/
 build-*/
 tmp/
 node_modules/
+/.cache/
 *.log
 *.pem
 *.key

@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "driver/i2c_master.h"
 #include "esp_err.h"
 #include "lvgl.h"
 #include "moto_nav_ui.h"
@@ -37,7 +38,7 @@ esp_err_t board_port_init(void);
 lv_display_t *board_port_get_display(void);
 
 /**
- * Reveal the AMOLED after the caller has drawn the first intentional frame.
+ * Reveal the panel after the caller has drawn the first intentional frame.
  * board_port_init keeps the panel dark so the LVGL default white screen can
  * never appear between panel reset and the boot animation.
  */
@@ -52,12 +53,17 @@ bool board_port_lock(uint32_t timeout_ms);
 /** Release a lock previously acquired with board_port_lock. */
 void board_port_unlock(void);
 
-/** GPIO3/SYS_OUT is high while the case PWR key is physically held. */
+/** Return whether the application-visible case PWR key is held. */
 bool board_port_power_button_pressed(void);
 
+/** Return whether this board exposes a case power button to the application. */
+bool board_port_has_power_button(void);
+
+/** Return the initialized shared I2C bus used by the onboard QMI8658. */
+i2c_master_bus_handle_t board_port_i2c_get_handle(void);
+
 /**
- * Request AXP2101 software power-off. Keep a deep-sleep fallback in the caller
- * for the USB-powered case until all three supply combinations are bench-tested.
+ * Request board-specific software power-off, if supported.
  */
 esp_err_t board_port_power_off(void);
 

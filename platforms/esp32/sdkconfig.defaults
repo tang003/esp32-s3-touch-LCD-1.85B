@@ -1,7 +1,8 @@
-# Waveshare ESP32-S3-Touch-AMOLED-1.75C: 32 MB QIO flash and 8 MB octal PSRAM.
-# These values match the official ESP-IDF example for this exact board.
+# Default board: Waveshare ESP32-S3-Touch-LCD-1.85B with 16 MB flash and
+# 8 MB octal PSRAM. The 1.75C board needs 32 MB flash selected in menuconfig.
+CONFIG_MOTO_BOARD_WAVESHARE_1_85B=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_SPIRAM=y
@@ -11,25 +12,24 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
 CONFIG_SPIRAM_RODATA=y
 
-# The board port supplies its own PSRAM draw buffers and explicitly opts into
-# direct PSRAM DMA. Keep a single outstanding QSPI transaction so old display
-# frames cannot accumulate; the original BSP's default bounce buffers are not
-# used by this board port.
+# CST816S may not answer the chip-ID read during startup, even when working.
+CONFIG_ESP_LCD_TOUCH_CST816S_DISABLE_READ_ID=y
+
+# The 1.75C board port supplies its own PSRAM draw buffers and opts into direct
+# PSRAM DMA. Keep a single outstanding QSPI transaction for that board.
 CONFIG_BSP_LCD_TRANS_QUEUE_DEPTH=1
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 CONFIG_ESP32S3_DATA_CACHE_64KB=y
 CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 
-# LVGL timing and the official BSP worker both use millisecond-scale scheduling.
+# LVGL timing and board workers use millisecond-scale scheduling.
 CONFIG_FREERTOS_HZ=1000
 CONFIG_LV_DEF_REFR_PERIOD=25
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
-# Creating the complete four-page LVGL instrument UI calls deeply into LVGL
-# after the vendor BSP has initialized the display. The ESP-IDF default 3584
-# byte app_main stack overflows during that one-time startup on real hardware.
+# Creating the four-page LVGL instrument UI needs a larger app_main stack.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # NimBLE is the phone transport. Bluetooth Classic is intentionally disabled
