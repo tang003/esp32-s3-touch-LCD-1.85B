@@ -8,7 +8,7 @@
 
 ![MOTO GPS 圆屏摩托车导航终端](assets/brand/moto-gps-cover.png)
 
-**板型进展：**ESP32 固件新增 **Waveshare ESP32-S3-Touch-LCD-1.85B** 配置，默认选用 360×360 屏幕与 16 MB Flash；原 **ESP32-S3-Touch-AMOLED-1.75C** 仍可选择。1.85B 已刷入实机，屏幕、触摸、蓝牙与 iPhone 演示导航已确认可用；滑动灵敏度仍待优化。编译及板型切换步骤见 [ESP32 固件说明](platforms/esp32/README.md)。
+**板型进展：**ESP32 固件新增 **Waveshare ESP32-S3-Touch-LCD-1.85B** 配置，默认选用 360×360 屏幕与 16 MB Flash；原 **ESP32-S3-Touch-AMOLED-1.75C** 仍可选择。1.85B 已刷入实机，屏幕、触摸、蓝牙与 iPhone 导航已确认可用；针对短滑的灵敏度调整已编译，尚待重新刷入实机验证。编译及板型切换步骤见 [ESP32 固件说明](platforms/esp32/README.md)。
 
 **想自己做一台 1.75C 微雪版？从 [购买、固件烧录与 iPhone 安装教程](docs/WAVESHARE_DIY_GUIDE.md)开始。** 这份 DIY 教程专指 1.75C，不适用于 1.85B 的接线、容量与电源操作。
 
@@ -28,7 +28,7 @@
 圆屏通过蓝牙显示简洁导航、速度、相对航向，并遥控 Apple Music。
 
 原项目验证的完整导航样机基于 **Waveshare ESP32-S3-Touch-AMOLED-1.75C**；本仓库的
-**ESP32-S3-Touch-LCD-1.85B** 已完成实机显示、触摸、蓝牙与驾车路线演示。电动车路线已实现并完成构建，仍需在新版 iPhone App 上实地验证。
+**ESP32-S3-Touch-LCD-1.85B** 已完成实机显示、触摸、蓝牙与驾车路线演示。用户已确认新版 iPhone App 的电动车导航正常；道路实骑和偏航重算仍待验证。
 
 仓库同时收录自研电路板、V3 外壳、加工审阅资料和完整产品技术方案。
 当前运行版本仍是微雪成品板 + iPhone；自研部分按历史工程候选归档，具体版本见下方资料入口。

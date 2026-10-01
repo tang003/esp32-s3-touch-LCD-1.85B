@@ -42,6 +42,10 @@ constexpr gpio_num_t kTouchScl = GPIO_NUM_10;
 constexpr gpio_num_t kTouchSda = GPIO_NUM_11;
 constexpr gpio_num_t kTouchReset = GPIO_NUM_1;
 constexpr gpio_num_t kTouchInterrupt = GPIO_NUM_4;
+// LVGL's 50 px / 3 px-per-sample defaults miss short swipes on this 360 px
+// round screen. Keep the tuning local to the 1.85B input device.
+constexpr std::uint8_t kSwipeMinDistancePx = 30;
+constexpr std::uint8_t kSwipeMinVelocityPx = 1;
 constexpr int kI2cClockHz = 400'000;
 constexpr int kLcdClockHz = 80'000'000;
 // A 50-row PSRAM strip requires a 36 KB temporary internal DMA buffer. With
@@ -706,10 +710,13 @@ extern "C" esp_err_t board_port_init(void) {
                       "Waveshare CST816S initialization failed");
   const esp_lv_adapter_touch_config_t touch_config =
       ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(display, touch);
-  if (esp_lv_adapter_register_touch(&touch_config) == nullptr) {
+  lv_indev_t* const touch_input = esp_lv_adapter_register_touch(&touch_config);
+  if (touch_input == nullptr) {
     ESP_LOGE(kTag, "LVGL could not register the CST816S touch device");
     return ESP_FAIL;
   }
+  lv_indev_set_gesture_min_distance(touch_input, kSwipeMinDistancePx);
+  lv_indev_set_gesture_min_velocity(touch_input, kSwipeMinVelocityPx);
 
   lv_obj_t* const startup_screen = lv_display_get_screen_active(display);
   lv_obj_set_style_bg_color(startup_screen, lv_color_black(), 0);
