@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var routePreviewOrigin: WGS84Point?
     @Published private(set) var isPlanningRoutePreview = false
     @Published private(set) var routePreviewFailure: String?
+    @Published private(set) var selectedRouteMode: RouteMode = .driving
 
     private let bluetooth = ESP32BLECentral()
     private let liveLocation = CoreLocationNavigationSource()
@@ -39,6 +40,7 @@ final class AppModel: ObservableObject {
     private var routePreviewGeneration: UInt64 = 0
 
     private static let recentPlacesKey = "MotoGPS.RecentPlaces.v1"
+    private static let routeModeKey = "MotoGPS.RouteMode.v1"
 
     init(gatewayBaseURL: URL = AppConfiguration.gatewayBaseURL) {
         liveRouteProvider = AmapGatewayRouteProvider(baseURL: gatewayBaseURL)
@@ -46,6 +48,9 @@ final class AppModel: ObservableObject {
         mapGatewayBaseURL = gatewayBaseURL
         surroundingMap = SurroundingMapStore(baseURL: gatewayBaseURL)
         recentPlaces = Self.loadRecentPlaces()
+        selectedRouteMode = RouteMode(
+            rawValue: UserDefaults.standard.string(forKey: Self.routeModeKey) ?? ""
+        ) ?? .driving
 
         surroundingMap.onScene = { [weak self] scene in
             self?.bluetooth.sendMapScene(scene)
@@ -195,7 +200,11 @@ final class AppModel: ObservableObject {
         }
         switch navigation.stateName {
         case "acquiring": return "请保持精确定位开启"
-        case "planning": return "正在读取高德实时路线与路况"
+        case "planning":
+            if isDemoActive { return "正在准备演示路线" }
+            return selectedRouteMode == .electrobike
+                ? "正在读取高德电动车路线"
+                : "正在读取高德实时路线与路况"
         case "navigating": return deviceReady ? "手机可以锁屏并放入口袋" : "手机继续导航，圆屏连接后自动同步"
         case "rerouting": return "新路线生成后会自动同步到圆屏"
         case "arrived": return "本次导航已经完成"
@@ -332,7 +341,8 @@ final class AppModel: ObservableObject {
                 selectedRoute: selectedRoutePreview.route,
                 selectedRouteOrigin: routePreviewOrigin,
                 liveProvider: liveRouteProvider
-            )
+            ),
+            routeMode: selectedRouteMode
         )
         bind(runtime)
         self.runtime = runtime
@@ -392,6 +402,13 @@ final class AppModel: ObservableObject {
         guard routePreviewCandidates.contains(where: { $0.id == id }) else { return }
         selectedRoutePreviewID = id
         navigationFailure = nil
+    }
+
+    func selectRouteMode(_ mode: RouteMode) {
+        guard !isNavigationActive, selectedRouteMode != mode else { return }
+        selectedRouteMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.routeModeKey)
+        if selectedPlace != nil { planRoutePreview() }
     }
 
     func planRoutePreview() {
@@ -460,6 +477,7 @@ final class AppModel: ObservableObject {
             requestID: routePreviewRequestID,
             origin: origin,
             destination: place.location,
+            routeMode: selectedRouteMode,
             destinationPOIID: place.id.isEmpty ? nil : place.id
         )
         let routeProvider = liveRouteProvider
@@ -475,7 +493,9 @@ final class AppModel: ObservableObject {
                 try Task.checkCancellation()
                 guard let self,
                       let currentPlace = self.selectedPlace,
-                      Self.placeIdentity(currentPlace) == placeIdentity
+                      Self.placeIdentity(currentPlace) == placeIdentity,
+                      self.routePreviewGeneration == generation,
+                      self.selectedRouteMode == request.routeMode
                 else { return }
                 let candidates = routes.enumerated().map {
                     RoutePreviewCandidate(ordinal: $0.offset, route: $0.element)

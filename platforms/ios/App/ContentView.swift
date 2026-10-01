@@ -1,3 +1,4 @@
+import MotoNavigationCore
 import SwiftUI
 
 enum MotoScreen: Hashable {
@@ -306,6 +307,19 @@ struct ContentView: View {
         List {
             if let place = model.selectedPlace {
                 Section {
+                    Picker("出行方式", selection: Binding(
+                        get: { model.selectedRouteMode },
+                        set: { model.selectRouteMode($0) }
+                    )) {
+                        Text("电动车").tag(RouteMode.electrobike)
+                        Text("驾车").tag(RouteMode.driving)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("route-mode-picker")
+                } header: {
+                    Text("出行方式")
+                }
+                Section {
                     Label {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(place.name).font(.headline)
@@ -328,7 +342,9 @@ struct ContentView: View {
                             ProgressView()
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("正在规划路线")
-                                Text("获取当前位置与路况…")
+                                Text(model.selectedRouteMode == .electrobike
+                                     ? "获取当前位置与电动车路线…"
+                                     : "获取当前位置与路况…")
                                     .font(.subheadline)
                                     .foregroundStyle(Color.secondary)
                             }
@@ -354,7 +370,9 @@ struct ContentView: View {
                     } header: {
                         Text("选择路线")
                     } footer: {
-                        Text("高德驾车路线 · 预计时间会随路况变化")
+                        Text(model.selectedRouteMode == .electrobike
+                             ? "高德电动车路线 · 会考虑限行等条件"
+                             : "高德驾车路线 · 预计时间会随路况变化")
                     }
                     Section { mapDownloadsButton }
                 } else if let failure = model.routePreviewFailure {
@@ -417,9 +435,11 @@ struct ContentView: View {
                             routeDistance(candidate)
                         }
                     }
-                    Label(candidate.trafficSummary, systemImage: "car.side")
-                        .font(.subheadline)
-                        .foregroundStyle(trafficTint(candidate))
+                    if model.selectedRouteMode == .driving {
+                        Label(candidate.trafficSummary, systemImage: "car.side")
+                            .font(.subheadline)
+                            .foregroundStyle(trafficTint(candidate))
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
@@ -431,7 +451,9 @@ struct ContentView: View {
             .contentShape(Rectangle())
         }
         .accessibilityIdentifier("route-option-\(candidate.ordinal)")
-        .accessibilityLabel("\(candidate.title)，\(candidate.durationText)，\(candidate.distanceText)，\(candidate.trafficSummary)")
+        .accessibilityLabel(model.selectedRouteMode == .driving
+                            ? "\(candidate.title)，\(candidate.durationText)，\(candidate.distanceText)，\(candidate.trafficSummary)"
+                            : "\(candidate.title)，\(candidate.durationText)，\(candidate.distanceText)")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
@@ -501,7 +523,9 @@ struct ContentView: View {
                 deviceSummaryButton
                 statusRow("手机定位", symbol: "location", value: locationStatus,
                           color: model.navigation.hasUsableFix ? .green : .secondary)
-                statusRow("路况", symbol: "car.side", value: trafficStatus, color: .secondary)
+                if model.selectedRouteMode == .driving || model.isDemoActive {
+                    statusRow("路况", symbol: "car.side", value: trafficStatus, color: .secondary)
+                }
                 SurroundingMapStatusRow(store: model.surroundingMap)
                 Button("管理离线地图") { showsMapDownloads = true }
             }

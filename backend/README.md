@@ -60,12 +60,15 @@ GET 搜索 URL 可能含搜索词和精确位置，瓦片路径可推断地区�
 | --- | --- |
 | `GET /healthz` | 服务模式、配置能力与地图源/缓存状态 |
 | `GET /v1/places?keywords=...&longitude_deg=...&latitude_deg=...&region=...` | POI 搜索；可选位置为 WGS84，经纬度必须成对传入 |
-| `POST /v1/route-options` | 最多三条候选普通驾车路线，供 App 全览和选择 |
-| `POST /v1/routes` | 单条路线、偏航重算与周期路线/路况刷新 |
+| `POST /v1/route-options` | 最多三条驾车或电动车候选路线，供 App 全览和选择 |
+| `POST /v1/routes` | 单条路线与偏航重算；驾车模式还用于周期路况刷新 |
 | `GET /v1/map/cities?keywords=...` | 城市、区县及四个直辖市的下载范围；不接受普通省或国家作为下载结果 |
 | `GET /v1/map/tiles/15/{x}/{y}` | 一块道路/建筑 JSON；仅支持 z15，x/y 为 0–32767 的整数，不接受查询参数 |
 
 路线请求与响应 schema 在 `shared/protocol`，请求样例在 `fixtures/route-request-v1.json`。
+`route_mode=driving` 使用高德驾车路径规划；`route_mode=electrobike` 使用高德电动车路径规划。
+电动车路线会考虑限行等条件，但接口不返回驾车的分段路况，响应中的 `traffic` 为空。
+旧版 App 默认继续请求驾车路线；切换电动车模式需要安装包含该选择项的新 IPA。
 路线输入位置为 WGS84，路线几何输出为 GCJ-02；地点搜索结果位置为 WGS84。
 `request_id` 原样返回，由导航核心拒绝旧响应。路线和高德响应不进入 OSM 地图磁盘缓存。
 普通驾车规划不是摩托车专属路线，不能保证避开摩托车禁行路段。路况权限、频率与配额

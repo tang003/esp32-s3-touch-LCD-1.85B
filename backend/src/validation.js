@@ -70,8 +70,8 @@ export function validateRouteRequest(value) {
   if (!validRequestId(value.request_id)) {
     throw new ProtocolValidationError("request_id must be a non-zero uint32");
   }
-  if (value.route_mode !== "driving") {
-    throw new ProtocolValidationError("route_mode must be driving");
+  if (value.route_mode !== "driving" && value.route_mode !== "electrobike") {
+    throw new ProtocolValidationError("route_mode must be driving or electrobike");
   }
   if (typeof value.is_reroute !== "boolean") {
     throw new ProtocolValidationError("is_reroute must be a boolean");

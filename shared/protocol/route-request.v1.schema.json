@@ -24,7 +24,7 @@
       "description": "Client-generated monotonic request identifier. Responses echo this value so stale results can be discarded."
     },
     "route_mode": {
-      "const": "driving"
+      "enum": ["driving", "electrobike"]
     },
     "origin": {
       "$ref": "#/$defs/wgs84Point"

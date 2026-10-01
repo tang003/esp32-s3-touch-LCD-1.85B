@@ -68,10 +68,15 @@ public struct NavigationFix: Equatable, Sendable {
     }
 }
 
+public enum RouteMode: String, Codable, CaseIterable, Hashable, Sendable {
+    case driving
+    case electrobike
+}
+
 public struct RouteRequest: Codable, Equatable, Sendable {
     public let protocolVersion: Int
     public let requestID: UInt32
-    public let routeMode: String
+    public let routeMode: RouteMode
     public let origin: WGS84Point
     public let destination: WGS84Point
     public let isReroute: Bool
@@ -82,13 +87,14 @@ public struct RouteRequest: Codable, Equatable, Sendable {
         requestID: UInt32,
         origin: WGS84Point,
         destination: WGS84Point,
+        routeMode: RouteMode = .driving,
         isReroute: Bool = false,
         previousRouteID: String? = nil,
         destinationPOIID: String? = nil
     ) {
         protocolVersion = 1
         self.requestID = requestID
-        routeMode = "driving"
+        self.routeMode = routeMode
         self.origin = origin
         self.destination = destination
         self.isReroute = isReroute

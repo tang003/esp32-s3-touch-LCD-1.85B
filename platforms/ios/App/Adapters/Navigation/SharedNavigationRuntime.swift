@@ -11,6 +11,7 @@ final class SharedNavigationRuntime {
     private let bridge = MotoNavCoreBridge()
     private let locationSource: any NavigationLocationSource
     private let routeProvider: any NavigationRouteProviding
+    private let routeMode: RouteMode
     private var networkTasks: [UInt32: Task<Void, Never>] = [:]
     private var tickTask: Task<Void, Never>?
     private var activeRoute: ActiveRoute?
@@ -29,10 +30,12 @@ final class SharedNavigationRuntime {
 
     init(
         locationSource: any NavigationLocationSource,
-        routeProvider: any NavigationRouteProviding
+        routeProvider: any NavigationRouteProviding,
+        routeMode: RouteMode = .driving
     ) {
         self.locationSource = locationSource
         self.routeProvider = routeProvider
+        self.routeMode = routeMode
     }
 
     @discardableResult
@@ -129,6 +132,7 @@ final class SharedNavigationRuntime {
                         longitudeDeg: command.destinationLongitudeDeg,
                         latitudeDeg: command.destinationLatitudeDeg
                     ),
+                    routeMode: routeMode,
                     isReroute: command.reroute,
                     previousRouteID: bridge.snapshot.routeID.isEmpty
                         ? nil
@@ -138,6 +142,15 @@ final class SharedNavigationRuntime {
                 runRouteRequest(request)
 
             case "request_traffic":
+                guard routeMode == .driving else {
+                    publish(
+                        bridge.rejectTrafficRequestID(
+                            command.requestID,
+                            receivedAtMs: Self.nowMs()
+                        )
+                    )
+                    continue
+                }
                 // A traffic segment offset is measured from the beginning of
                 // the complete route. Refresh with that route's original
                 // endpoints, never with the rider's current position.

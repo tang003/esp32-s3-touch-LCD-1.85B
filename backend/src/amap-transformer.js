@@ -178,14 +178,14 @@ function assertAmapSuccess(payload) {
 }
 
 /**
- * Converts an AMap Route Planning v2 driving response into protocol v1.
+ * Converts an AMap Route Planning v2 response into protocol v1.
  * No AMap field is allowed to escape this function.
  */
 export function transformAmapRouteV2(payload, { generatedAtMs = Date.now(), pathIndex = 0 } = {}) {
   assertAmapSuccess(payload);
   const paths = payload.route?.paths;
   if (!Array.isArray(paths) || !paths[pathIndex]) {
-    throw new AmapTransformError("NO_ROUTE", "AMap returned no usable driving path");
+    throw new AmapTransformError("NO_ROUTE", "AMap returned no usable path");
   }
 
   const path = paths[pathIndex];
@@ -296,7 +296,7 @@ export function transformAmapRouteOptionsV2(
   assertAmapSuccess(payload);
   const paths = payload.route?.paths;
   if (!Array.isArray(paths) || paths.length === 0) {
-    throw new AmapTransformError("NO_ROUTE", "AMap returned no usable driving path");
+    throw new AmapTransformError("NO_ROUTE", "AMap returned no usable path");
   }
 
   const count = Math.min(Math.max(1, Math.trunc(maximumRoutes)), 3, paths.length);

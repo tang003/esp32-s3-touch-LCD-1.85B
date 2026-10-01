@@ -64,12 +64,15 @@ these. Verify rotation, backups, retention and privacy disclosures. Do not claim
 | --- | --- |
 | `GET /healthz` | Service mode, configured capabilities and map-source/cache status |
 | `GET /v1/places?keywords=...&longitude_deg=...&latitude_deg=...&region=...` | POI search; optional WGS84 latitude and longitude must be supplied together |
-| `POST /v1/route-options` | Up to three ordinary driving routes for preview and selection |
-| `POST /v1/routes` | A route, off-route rerouting and periodic route/traffic refresh |
+| `POST /v1/route-options` | Up to three driving or electric-bike routes for preview and selection |
+| `POST /v1/routes` | A route and off-route rerouting; driving mode also uses it for periodic traffic refresh |
 | `GET /v1/map/cities?keywords=...` | City, district and four province-level municipality download bounds; ordinary provinces and countries are excluded |
 | `GET /v1/map/tiles/15/{x}/{y}` | One road/building JSON tile; z15 only, integer x/y from 0 to 32767, no query parameters |
 
 Route schemas are in `shared/protocol`; see `fixtures/route-request-v1.json` for a request example.
+`route_mode=driving` calls AMap driving directions; `route_mode=electrobike` calls AMap electric-bike directions.
+Electric-bike directions consider restrictions but do not include driving traffic segments, so `traffic` is empty.
+Older app builds continue to request driving routes; choosing electric-bike routes requires a new IPA.
 Route input positions are WGS84 and output geometry is GCJ-02; place-search result positions are WGS84.
 `request_id` is echoed unchanged so the navigation core can reject stale responses. Route and AMap
 responses do not enter the OSM map disk cache. Ordinary driving routes are not motorcycle-specific

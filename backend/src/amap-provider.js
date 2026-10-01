@@ -8,7 +8,8 @@ import {
   isTransientUpstreamStatus,
 } from "./upstream-retry.js";
 
-const DEFAULT_ENDPOINT = "https://restapi.amap.com/v5/direction/driving";
+const DEFAULT_DRIVING_ENDPOINT = "https://restapi.amap.com/v5/direction/driving";
+const DEFAULT_ELECTROBIKE_ENDPOINT = "https://restapi.amap.com/v5/direction/electrobike";
 
 export class AmapProviderError extends Error {
   constructor(code, message, { retryable = true } = {}) {
@@ -23,7 +24,7 @@ function formatProviderPoint(point) {
   return `${Number(point.longitude_deg).toFixed(6)},${Number(point.latitude_deg).toFixed(6)}`;
 }
 
-export function buildAmapDrivingUrl(request, { key, endpoint = DEFAULT_ENDPOINT }) {
+function buildAmapRouteUrl(request, { key, endpoint }) {
   if (typeof key !== "string" || key.trim() === "") {
     throw new AmapProviderError("SERVER_MISCONFIGURED", "AMap server key is not configured", {
       retryable: false,
@@ -41,6 +42,11 @@ export function buildAmapDrivingUrl(request, { key, endpoint = DEFAULT_ENDPOINT 
   url.searchParams.set("key", key);
   url.searchParams.set("origin", formatProviderPoint(origin));
   url.searchParams.set("destination", formatProviderPoint(destination));
+  return url;
+}
+
+export function buildAmapDrivingUrl(request, { key, endpoint = DEFAULT_DRIVING_ENDPOINT }) {
+  const url = buildAmapRouteUrl(request, { key, endpoint });
   url.searchParams.set("strategy", "32");
   url.searchParams.set("show_fields", "cost,polyline,navi,tmcs");
   if (request.destination_poi_id) {
@@ -49,10 +55,21 @@ export function buildAmapDrivingUrl(request, { key, endpoint = DEFAULT_ENDPOINT 
   return url;
 }
 
+export function buildAmapElectrobikeUrl(
+  request,
+  { key, endpoint = DEFAULT_ELECTROBIKE_ENDPOINT },
+) {
+  const url = buildAmapRouteUrl(request, { key, endpoint });
+  url.searchParams.set("show_fields", "cost,navi,polyline");
+  url.searchParams.set("alternative_route", "3");
+  return url;
+}
+
 export function createAmapProvider({
   key,
   fetchImpl = globalThis.fetch,
-  endpoint = DEFAULT_ENDPOINT,
+  endpoint = DEFAULT_DRIVING_ENDPOINT,
+  electrobikeEndpoint = DEFAULT_ELECTROBIKE_ENDPOINT,
   timeoutMs = 8000,
   maxAttempts = 3,
   retryDelayMs = 100,
@@ -63,7 +80,9 @@ export function createAmapProvider({
   }
 
   async function fetchRoutePayload(request, { signal } = {}) {
-      const url = buildAmapDrivingUrl(request, { key, endpoint });
+      const url = request.route_mode === "electrobike"
+        ? buildAmapElectrobikeUrl(request, { key, endpoint: electrobikeEndpoint })
+        : buildAmapDrivingUrl(request, { key, endpoint });
       const deadlineSignal = AbortSignal.timeout(timeoutMs);
       const signals = [deadlineSignal];
       if (signal) signals.push(signal);
