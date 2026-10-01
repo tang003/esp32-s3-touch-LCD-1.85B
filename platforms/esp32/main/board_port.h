@@ -3,7 +3,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef ESP_PLATFORM
 #include "driver/i2c_master.h"
+#else
+// Host-side bridge checks do not use the ESP-IDF bus implementation.
+typedef void *i2c_master_bus_handle_t;
+#endif
 #include "esp_err.h"
 #include "lvgl.h"
 #include "moto_nav_ui.h"
