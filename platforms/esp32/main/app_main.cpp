@@ -322,6 +322,27 @@ void page_button_task(void* context) {
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
+
+void rollback_pending_ota_on_startup_failure() {
+#if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+  const esp_partition_t* const running = esp_ota_get_running_partition();
+  esp_ota_img_states_t image_state{};
+  if (running == nullptr ||
+      esp_ota_get_state_partition(running, &image_state) != ESP_OK ||
+      image_state != ESP_OTA_IMG_PENDING_VERIFY) {
+    return;
+  }
+  ESP_LOGE(kTag, "updated app failed startup; rolling back now");
+  const esp_err_t result = esp_ota_mark_app_invalid_rollback_and_reboot();
+  ESP_LOGE(kTag, "could not roll back updated app: %s",
+           esp_err_to_name(result));
+#endif
+}
+
+void stop_after_fatal_startup_error() {
+  rollback_pending_ota_on_startup_failure();
+  vTaskDelete(nullptr);
+}
 } // namespace
 
 extern "C" void app_main(void) {
@@ -338,14 +359,14 @@ extern "C" void app_main(void) {
   if (init_result != ESP_OK) {
     ESP_LOGE(kTag, "board initialization stopped before shared UI startup: %s",
              esp_err_to_name(init_result));
-    vTaskDelete(nullptr);
+    stop_after_fatal_startup_error();
     return;
   }
 
   lv_display_t *const display = board_port_get_display();
   if (display == nullptr) {
     ESP_LOGE(kTag, "board port returned no LVGL display");
-    vTaskDelete(nullptr);
+    stop_after_fatal_startup_error();
     return;
   }
 
@@ -354,13 +375,13 @@ extern "C" void app_main(void) {
       lv_display_get_color_format(display) != LV_COLOR_FORMAT_RGB565) {
     ESP_LOGE(kTag, "board display violates the shared RGB565 portability "
                    "contract");
-    vTaskDelete(nullptr);
+    stop_after_fatal_startup_error();
     return;
   }
 
   if (!board_port_lock(UINT32_MAX)) {
     ESP_LOGE(kTag, "could not acquire LVGL lock");
-    vTaskDelete(nullptr);
+    stop_after_fatal_startup_error();
     return;
   }
 
@@ -382,7 +403,7 @@ extern "C" void app_main(void) {
 
   if (!board_port_lock(UINT32_MAX)) {
     ESP_LOGE(kTag, "could not reacquire LVGL lock after boot screen");
-    vTaskDelete(nullptr);
+    stop_after_fatal_startup_error();
     return;
   }
 
@@ -410,7 +431,7 @@ extern "C" void app_main(void) {
 
   if (!phone_bridge.start_renderer()) {
     ESP_LOGE(kTag, "UI renderer startup failed; BLE was not started");
-    vTaskDelete(nullptr);
+    stop_after_fatal_startup_error();
     return;
   }
 
@@ -473,7 +494,9 @@ extern "C" void app_main(void) {
   // A freshly updated slot is provisional until the display and BLE have
   // both initialized. Confirm only a healthy boot so the bootloader can
   // restore the previous image after a failed startup.
-  if (reveal_result == ESP_OK && ble_result == ESP_OK) {
+  if (reveal_result != ESP_OK || ble_result != ESP_OK) {
+    rollback_pending_ota_on_startup_failure();
+  } else {
     const esp_partition_t* const running = esp_ota_get_running_partition();
     esp_ota_img_states_t image_state{};
     if (running != nullptr &&
