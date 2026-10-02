@@ -19,10 +19,17 @@ class PhoneNavBridge {
   using SendCallback = bool (*)(const moto::ble::Message& message,
                                 std::uint8_t frame_flags,
                                 void* context);
+  using SettingsPersistCallback = bool (*)(
+      const moto::ble::DeviceSettings& settings, void* context);
 
   explicit PhoneNavBridge(moto::nav::NavPresenter& presenter);
 
   void set_sender(SendCallback callback, void* context) noexcept;
+  void set_settings_persist_callback(SettingsPersistCallback callback,
+                                     void* context) noexcept;
+  void set_settings_page_enabled(bool enabled) noexcept;
+  void restore_device_settings(const moto::ble::DeviceSettings& settings);
+  moto::ble::DeviceSettings device_settings() const;
   void install_ui_callbacks();
   // Starts the sole background owner of NavPresenter and all LVGL writes.
   // BLE/IMU callbacks only retain state and signal this low-priority task.
@@ -33,8 +40,14 @@ class PhoneNavBridge {
   void render_pending_for_test();
 #endif
   void on_link_state(bool active);
+  void on_protocol_ready();
   void on_imu_sample(float heading_rate_dps, std::uint64_t sample_ms);
   void update_demo(std::uint64_t now_ms);
+  // Safe to call from the screen policy task; disconnected snapshots may
+  // retain an old navigation state and must not keep the display awake.
+  bool navigation_active() const;
+  // Use the same page selection path as a touch gesture, including BLE sync.
+  void select_next_page();
   moto::ble::AckStatus on_message(
       const moto::ble::ReassembledMessage& message);
 
@@ -56,6 +69,8 @@ class PhoneNavBridge {
   };
 
   static void page_changed(moto_ui_page_t page, void* context);
+  static void settings_changed(uint8_t brightness_percent,
+                               uint8_t screen_off_minutes, void* context);
   static void music_command(moto_music_command_t command, void* context);
   static void demo_changed(uint8_t enabled, void* context);
 
@@ -77,6 +92,9 @@ class PhoneNavBridge {
   void run_renderer();
 #endif
   void send_page_command(moto_ui_page_t page);
+  void send_device_settings();
+  bool apply_device_settings(const moto::ble::DeviceSettings& settings,
+                             bool persist);
   void send_music_command(moto_music_command_t command);
   void send_device_command(moto::ble::DeviceCommand command);
   void set_demo_active(bool active);
@@ -95,6 +113,8 @@ class PhoneNavBridge {
   GeometryAssembly geometry_{};
   SendCallback sender_ = nullptr;
   void* sender_context_ = nullptr;
+  SettingsPersistCallback settings_persist_callback_ = nullptr;
+  void* settings_persist_context_ = nullptr;
   // BLE decoding runs on moto_ble_rx while touch callbacks run on the LVGL
   // worker. Protect every access to the shared navigation/session/command
   // state, and release this mutex before calling LVGL or the BLE sender.
@@ -102,6 +122,12 @@ class PhoneNavBridge {
   std::uint32_t phone_session_id_ = 0;
   std::uint16_t next_command_id_ = 1;
   bool link_active_ = false;
+  bool phone_supports_settings_ = false;
+  bool settings_page_enabled_ = false;
+  bool settings_page_active_ = false;
+  bool settings_sync_pending_ = false;
+  moto::ble::DeviceSettings device_settings_{};
+  moto::ble::DeviceSettings last_settings_sent_{};
   moto_ui_phone_connection_t ui_phone_connection_ = MOTO_UI_PHONE_OFFLINE;
   moto::ble::MediaState media_state_{};
   moto::ble::MediaState render_media_state_{};
@@ -114,6 +140,7 @@ class PhoneNavBridge {
     RenderNavigation = 1U << 0U,
     RenderMotion = 1U << 1U,
     RenderMedia = 1U << 2U,
+    RenderSettings = 1U << 3U,
   };
   std::atomic<std::uint32_t> pending_render_flags_{0};
 #ifdef ESP_PLATFORM

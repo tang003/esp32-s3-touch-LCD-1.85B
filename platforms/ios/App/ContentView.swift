@@ -664,6 +664,49 @@ struct ContentView: View {
                 } footer: {
                     Text("圆屏保持开机并靠近 iPhone。连接成功后，当前导航会自动同步。")
                 }
+                Section {
+                    Picker("屏幕亮度", selection: deviceBrightnessSelection) {
+                        Text("未读取").tag(UInt8(0))
+                        ForEach([UInt8(25), 50, 75, 100], id: \.self) { percent in
+                            Text("\(percent)%").tag(percent)
+                        }
+                    }
+                    .disabled(model.deviceSettings == nil || model.device.settingsUpdatePending)
+                    .accessibilityIdentifier("device-brightness-picker")
+                    Picker("无操作后熄屏", selection: deviceScreenOffSelection) {
+                        Text("未读取").tag(UInt8(255))
+                        ForEach([UInt8(0), 1, 3, 5], id: \.self) { minutes in
+                            Text(minutes == 0 ? "从不" : "\(minutes) 分钟").tag(minutes)
+                        }
+                    }
+                    .disabled(model.deviceSettings == nil || model.device.settingsUpdatePending)
+                    .accessibilityIdentifier("device-screen-off-picker")
+                    if model.device.settingsUpdatePending {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("正在保存到设备…")
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(Color.secondary)
+                    }
+                    if let error = model.device.settingsError {
+                        Text(error)
+                            .font(.subheadline)
+                            .foregroundStyle(Color.secondary)
+                    }
+                } header: {
+                    Text("屏幕")
+                } footer: {
+                    if !model.deviceReady {
+                        Text("连接圆屏后可调整屏幕设置。")
+                    } else if !model.deviceSettingsSupported {
+                        Text("当前设备固件不支持远程屏幕设置。")
+                    } else if model.deviceSettings == nil {
+                        Text("正在从设备读取当前设置。")
+                    } else {
+                        Text("导航时保持亮屏；熄屏后可点击屏幕或按键唤醒。")
+                    }
+                }
                 Section("定位") {
                     statusRow("搜索位置", symbol: "location", value: searchLocationStatus, color: .secondary)
                     if model.searchLocationStatus == .permissionDenied {
@@ -683,6 +726,20 @@ struct ContentView: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+    }
+
+    private var deviceBrightnessSelection: Binding<UInt8> {
+        Binding(
+            get: { model.deviceSettings?.brightnessPercent ?? 0 },
+            set: { model.setDeviceBrightness($0) }
+        )
+    }
+
+    private var deviceScreenOffSelection: Binding<UInt8> {
+        Binding(
+            get: { model.deviceSettings?.screenOffMinutes ?? 255 },
+            set: { model.setDeviceScreenOffMinutes($0) }
+        )
     }
 
     private func statusRow(_ title: String, symbol: String, value: String, color: Color) -> some View {

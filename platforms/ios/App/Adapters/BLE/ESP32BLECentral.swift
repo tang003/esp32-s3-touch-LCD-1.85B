@@ -2,6 +2,11 @@
 import Foundation
 import MotoNavigationCore
 
+struct BLEDeviceSettings: Equatable {
+    let brightnessPercent: UInt8
+    let screenOffMinutes: UInt8
+}
+
 struct BLEDeviceSnapshot: Equatable {
     enum Connection: Equatable {
         case idle
@@ -15,6 +20,10 @@ struct BLEDeviceSnapshot: Equatable {
     var connection: Connection = .idle
     var negotiatedProtocol = "--"
     var lastCommandID: UInt16?
+    var settingsSupported = false
+    var settings: BLEDeviceSettings?
+    var settingsUpdatePending = false
+    var settingsError: String?
 }
 
 enum BLECommandDisposition: UInt8 {
@@ -228,6 +237,9 @@ final class ESP32BLECentral: NSObject {
     private var pendingNavigationState: MotoNavCoreSnapshot?
     private var pendingMediaState: PhoneMediaState?
     private var pendingMapScene: OfflineMapSceneWindow?
+    private var pendingDeviceSettings: BLEDeviceSettings?
+    private var lastSettingsSequence: UInt16?
+    private var deviceSettingsTimeoutTask: Task<Void, Never>?
     private var mapSceneDelivery = BLEMapSceneDelivery()
     private var mapSceneFinalFrame: Data?
     private var shouldMaintainConnection = false
@@ -316,6 +328,49 @@ final class ESP32BLECentral: NSObject {
     func sendMediaState(_ state: PhoneMediaState) {
         pendingMediaState = state
         flushPendingMediaState()
+    }
+
+    /// The device owns the persisted settings. Only send edits after its
+    /// current values arrive; never replay a phone-side default on reconnect.
+    func sendDeviceSettings(brightnessPercent: UInt8, screenOffMinutes: UInt8) {
+        guard protocolReady,
+              peerCapabilities & MotoBLEProtocolCodec.deviceSettingsCapability() != 0,
+              snapshot.settings != nil,
+              pendingDeviceSettings == nil,
+              let codec
+        else { return }
+        guard [25, 50, 75, 100].contains(brightnessPercent),
+              [0, 1, 3, 5].contains(screenOffMinutes)
+        else { return }
+
+        let requested = BLEDeviceSettings(
+            brightnessPercent: brightnessPercent,
+            screenOffMinutes: screenOffMinutes
+        )
+        if snapshot.settings == requested { return }
+        let input = MotoBLEDeviceSettingsInput()
+        input.brightnessPercent = brightnessPercent
+        input.screenOffMinutes = screenOffMinutes
+        do {
+            pendingDeviceSettings = requested
+            snapshot.settingsUpdatePending = true
+            snapshot.settingsError = nil
+            try send(codec.encodeDeviceSettings(input))
+            deviceSettingsTimeoutTask?.cancel()
+            deviceSettingsTimeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(4))
+                guard !Task.isCancelled, let self,
+                      self.pendingDeviceSettings == requested
+                else { return }
+                self.pendingDeviceSettings = nil
+                self.snapshot.settingsUpdatePending = false
+                self.snapshot.settingsError = "设备未确认设置，请重试。"
+            }
+        } catch {
+            pendingDeviceSettings = nil
+            snapshot.settingsUpdatePending = false
+            snapshot.settingsError = "设置发送失败，请重试。"
+        }
     }
 
     /// Map scenes are sparse, low-frequency replacements.  Retain only the
@@ -562,6 +617,8 @@ final class ESP32BLECentral: NSObject {
                 handshakeTask = nil
                 protocolReady = true
                 peerCapabilities = value.capabilities
+                snapshot.settingsSupported =
+                    value.capabilities & MotoBLEProtocolCodec.deviceSettingsCapability() != 0
                 // A physical connection is not healthy until service discovery,
                 // subscription and the full application handshake all succeed.
                 // Keeping the attempt count until here gives repeated GATT or
@@ -667,6 +724,10 @@ final class ESP32BLECentral: NSObject {
         lastRouteGeometrySignature = nil
         mapSceneDelivery = BLEMapSceneDelivery()
         mapSceneFinalFrame = nil
+        deviceSettingsTimeoutTask?.cancel()
+        deviceSettingsTimeoutTask = nil
+        pendingDeviceSettings = nil
+        lastSettingsSequence = nil
         phoneToDeviceCharacteristic = nil
         deviceToPhoneCharacteristic = nil
         codec = nil
@@ -683,6 +744,10 @@ final class ESP32BLECentral: NSObject {
         gattSetupInProgress = false
         snapshot.negotiatedProtocol = "--"
         snapshot.lastCommandID = nil
+        snapshot.settingsSupported = false
+        snapshot.settings = nil
+        snapshot.settingsUpdatePending = false
+        snapshot.settingsError = nil
     }
 
     /// GATT discovery, subscription and write failures cannot recover while the
@@ -1378,6 +1443,14 @@ extension ESP32BLECentral: @preconcurrency CBPeripheralDelegate {
                         commandID: commandID,
                         status: originalStatus
                     )
+                } else if inbound.ackRequested,
+                          lastSettingsSequence == inbound.sequence
+                {
+                    acknowledge(
+                        sequence: inbound.sequence,
+                        commandID: 0,
+                        status: .accepted
+                    )
                 }
                 return
             }
@@ -1421,6 +1494,31 @@ extension ESP32BLECentral: @preconcurrency CBPeripheralDelegate {
                         return
                     }
                     flushPendingMapScene()
+                }
+                return
+            }
+            if let settings = inbound.deviceSettings {
+                guard snapshot.settingsSupported else { return }
+                lastSettingsSequence = inbound.sequence
+                let accepted = BLEDeviceSettings(
+                    brightnessPercent: settings.brightnessPercent,
+                    screenOffMinutes: settings.screenOffMinutes
+                )
+                snapshot.settings = accepted
+                if pendingDeviceSettings == nil { snapshot.settingsError = nil }
+                if pendingDeviceSettings == accepted {
+                    pendingDeviceSettings = nil
+                    deviceSettingsTimeoutTask?.cancel()
+                    deviceSettingsTimeoutTask = nil
+                    snapshot.settingsUpdatePending = false
+                    snapshot.settingsError = nil
+                }
+                if inbound.ackRequested {
+                    acknowledge(
+                        sequence: inbound.sequence,
+                        commandID: 0,
+                        status: .accepted
+                    )
                 }
                 return
             }

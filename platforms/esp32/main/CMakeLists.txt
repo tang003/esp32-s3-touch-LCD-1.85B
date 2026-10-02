@@ -28,6 +28,7 @@ endif()
 idf_component_register(
     SRCS
         "app_main.cpp"
+        "battery_gauge.cpp"
         "ble_nav_transport_nimble.cpp"
         "${MOTO_BOARD_PORT_SOURCE}"
         "motion_heading_sensor.cpp"
@@ -44,6 +45,7 @@ idf_component_register(
         "${MOTO_SHARED_UI_INCLUDE}"
     REQUIRES
         esp_timer
+        esp_rom
         esp_driver_gpio
         esp_driver_i2c
         esp_driver_spi

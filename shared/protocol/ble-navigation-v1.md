@@ -164,6 +164,7 @@ START 当且仅当 `fragment_offset == 0`。END 当且仅当
 | `0x13` | MediaState | 手机→设备 | 曲目/播放变化，进度最高 1 Hz |
 | `0x14` | MapScene | 手机→设备 | 前进约 100 m、跨离线分块或路线改变时 |
 | `0x20` | DeviceCommand | 设备→手机 | 用户动作，ACK_REQUESTED+URGENT |
+| `0x21` | DeviceSettings | 双向 | 连接就绪后及用户修改时 |
 
 ## 6. Payload 编码
 
@@ -182,7 +183,8 @@ u16 heartbeat_interval_ms  >=250
 ```
 
 能力位：bit0 navigation、bit1 route geometry、bit2 traffic、bit3 media state、
-bit4 touch commands、bit5 music commands、bit6 command ACK、bit7 map scene。
+bit4 touch commands、bit5 music commands、bit6 command ACK、bit7 map scene、
+bit8 device settings。
 
 ### 6.2 Heartbeat (`0x02`, 固定 11 字节)
 
@@ -399,6 +401,21 @@ kind：0 PageSelected、1 Tap、2 LongPress、3 SwipeLeft、4 SwipeRight、5 Swi
 
 手机以 `(session_id, command_id)` 去重；成功、失败或重复都回复 Ack。UI 动作必须在
 成功提交后才 ACK Ok。
+
+### 6.10 DeviceSettings (`0x21`, 固定 3 字节)
+
+```text
+u8 revision                 1
+u8 brightness_percent       25、50、75 或 100
+u8 screen_off_minutes       0（不自动熄屏）、1、3 或 5
+```
+
+1.85B 设备是设置的保存方。最终握手完成后，设备发送当前设置；手机只在读到设备值后
+开放编辑，修改时发回完整的两个字段，设备写入 NVS 成功后回显实际值。设备发给手机的
+`DeviceSettings` 带 `ACK_REQUESTED`，未收到 Ack 时会重试；写入失败时不会回显新值。
+设置页只在设备本地切换，
+不占用 `DisplayPage` 枚举，也不发送 `PageSelected`。熄屏时间只作用于非导航空闲状态；
+导航期间可手动熄屏。旧固件不声明 bit8，手机不得向其发送该消息。
 
 ## 7. Display Snapshot 到共享 NavSnapshot
 

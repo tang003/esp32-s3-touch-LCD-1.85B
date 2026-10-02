@@ -8,7 +8,7 @@
 
 ![MOTO GPS round-display motorcycle navigation terminal](assets/brand/moto-gps-cover.png)
 
-**Board support update:** The ESP32 firmware now has a **Waveshare ESP32-S3-Touch-LCD-1.85B** configuration, selected by default for its 360×360 display and 16 MB Flash. The original **ESP32-S3-Touch-AMOLED-1.75C** remains selectable. The 1.85B has been flashed to hardware; serial logs confirm display, touch, BLE and IMU initialization. Visual and touch interaction still need physical confirmation. See the [ESP32 firmware notes](platforms/esp32/README.en.md) for build and board-selection steps.
+**Board support update:** The ESP32 firmware now has a **Waveshare ESP32-S3-Touch-LCD-1.85B** configuration, selected by default for its 360×360 display and 16 MB Flash. The original **ESP32-S3-Touch-AMOLED-1.75C** remains selectable. The 1.85B has been flashed to hardware; the user confirmed its display, touch, BLE connection and iPhone e-bike navigation work. The new screen power policy and device settings page compile locally and await flashing and on-device verification. The iPhone settings page is in source and awaits an iOS build and live connection check. See the [ESP32 firmware notes](platforms/esp32/README.en.md) for build and board-selection steps.
 
 **Want to build a 1.75C Waveshare edition yourself? Start with the [buying, firmware flashing and iPhone installation guide](docs/WAVESHARE_DIY_GUIDE.en.md).** This DIY guide is specific to the 1.75C; its wiring, flash size and power instructions do not apply to the 1.85B.
 
@@ -23,9 +23,8 @@ documentation through Pull Requests with build instructions and tested-device de
 contributor attribution, and the existing project licence still applies. See the
 [Android collaboration invitation](docs/ANDROID_AI_GUIDE.en.md#lets-build-the-android-version-together) for ways to join in.
 
-The source is provided for you to compile and install yourself; there is no prebuilt firmware or
-App Store / TestFlight download published from this repository yet.
-**iOS 0.3.0 (5) includes release preparation changes and is not yet distributed through TestFlight.**
+The source and [unsigned iPhone IPA from GitHub Actions](docs/IOS_SIDELOAD.en.md) are available;
+there is no App Store or TestFlight download. **The current iOS source version is 0.3.2 (7).**
 The guide covers device selection, factory backup, Xcode personal signing, pairing, the demo and
 frequently asked questions.
 
@@ -93,7 +92,7 @@ prototyping has resumed or production acceptance has been completed.
 | Grey roads / buildings | Surrounding OSM / Protomaps maps load online by default; city, district and route-corridor downloads, with the bundled Jinan map retained as a fallback |
 | Speedometer / heading | Phone positioning provides speed and direction of travel; the on-board QMI8658 assists with relative turning |
 | Music | Apple Music previous track, play/pause, next track |
-| Animation / touch | Black-and-white logo fade in and out, connection-state transitions, swipe page changes and auto-hiding page dots; software power-off by holding PWR applies only to the 1.75C |
+| Animation / touch | Black-and-white logo fade in and out, connection-state transitions, swipe page changes and auto-hiding page dots; on the 1.85B, short BOOT changes pages, long BOOT turns off the backlight, and idle time dims then turns off the backlight; software power-off by holding PWR applies only to the 1.75C |
 | Demo | Near Building D of the Jinan Big Data Industry Base → near Inspur headquarters; online requests and the OSM offline fallback are explicitly distinguished |
 
 ## Feature details
@@ -271,6 +270,11 @@ as planning starts and the route arrives.
 
 - Swipe left and right to switch between the navigation, speedometer, heading and music pages; the
   music page is available according to the phone's capabilities.
+- On the 1.85B, a short BOOT press changes pages while the screen is lit. Holding BOOT for about
+  1.5 seconds turns off the backlight. When the screen is dark, a short BOOT press only wakes it;
+  touch also wakes it, and the first touch does not activate a page control.
+- The 1.85B stays lit during active navigation. With no active navigation, the backlight dims to
+  25% after 60 seconds of inactivity and turns off after 180 seconds. The board and BLE keep running.
 - Dots at the bottom identify the current page and hide automatically after five seconds.
 - The dots reappear after a touch or a page change.
 - On the 1.75C only, holding the side PWR button for about three seconds shows the power-off screen

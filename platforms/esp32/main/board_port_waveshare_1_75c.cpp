@@ -959,6 +959,14 @@ extern "C" esp_err_t board_port_reveal_display(void) {
   return ESP_OK;
 }
 
+extern "C" esp_err_t board_port_set_display_brightness(std::uint8_t) {
+  return ESP_ERR_NOT_SUPPORTED;
+}
+
+extern "C" std::uint32_t board_port_last_touch_ms(void) { return 0; }
+
+extern "C" bool board_port_take_touch_wake_request(void) { return false; }
+
 extern "C" bool board_port_lock(uint32_t timeout_ms) {
   if (display == nullptr) {
     return false;
@@ -979,6 +987,10 @@ extern "C" bool board_port_power_button_pressed(void) {
 }
 
 extern "C" bool board_port_has_power_button(void) { return true; }
+
+extern "C" bool board_port_has_page_button(void) { return false; }
+
+extern "C" bool board_port_page_button_pressed(void) { return false; }
 
 extern "C" esp_err_t board_port_power_off(void) {
   if (pmic == nullptr) {

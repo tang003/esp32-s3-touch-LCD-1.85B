@@ -287,8 +287,32 @@ void PhoneNavBridge::set_sender(SendCallback callback,
   sender_context_ = context;
 }
 
+void PhoneNavBridge::set_settings_persist_callback(
+    SettingsPersistCallback callback, void* context) noexcept {
+  const std::lock_guard<std::mutex> lock(state_mutex_);
+  settings_persist_callback_ = callback;
+  settings_persist_context_ = context;
+}
+
+void PhoneNavBridge::set_settings_page_enabled(bool enabled) noexcept {
+  const std::lock_guard<std::mutex> lock(state_mutex_);
+  settings_page_enabled_ = enabled;
+  if (!enabled) settings_page_active_ = false;
+}
+
+void PhoneNavBridge::restore_device_settings(
+    const moto::ble::DeviceSettings& settings) {
+  apply_device_settings(settings, false);
+}
+
+moto::ble::DeviceSettings PhoneNavBridge::device_settings() const {
+  const std::lock_guard<std::mutex> lock(state_mutex_);
+  return device_settings_;
+}
+
 void PhoneNavBridge::install_ui_callbacks() {
   moto_nav_ui_set_page_change_callback(page_changed, this);
+  moto_nav_ui_set_settings_change_callback(settings_changed, this);
   moto_nav_ui_set_music_command_callback(music_command, this);
   moto_nav_ui_set_demo_change_callback(demo_changed, this);
 }
@@ -332,6 +356,8 @@ void PhoneNavBridge::on_link_state(bool active) {
       phone_snapshot.network = moto::nav::NetworkState::Connecting;
     } else {
       phone_session_id_ = 0;
+      phone_supports_settings_ = false;
+      settings_sync_pending_ = false;
       phone_snapshot.network = moto::nav::NetworkState::Offline;
       phone_snapshot.gnss_stale = true;
       phone_snapshot.has_usable_fix = false;
@@ -352,6 +378,14 @@ void PhoneNavBridge::on_link_state(bool active) {
   const std::uint32_t flags = static_cast<std::uint32_t>(RenderNavigation) |
       (active ? 0U : static_cast<std::uint32_t>(RenderMedia));
   request_render(flags);
+}
+
+void PhoneNavBridge::on_protocol_ready() {
+  {
+    const std::lock_guard<std::mutex> lock(state_mutex_);
+    settings_sync_pending_ = true;
+  }
+  send_device_settings();
 }
 
 void PhoneNavBridge::on_imu_sample(float heading_rate_dps,
@@ -474,9 +508,31 @@ void PhoneNavBridge::update_demo(std::uint64_t now_ms) {
     const std::uint64_t elapsed_ms = now_ms >= demo_started_ms_
                                          ? now_ms - demo_started_ms_
                                          : 0;
+    const auto selected_page = snapshot_.display_page;
     fill_demo_snapshot(snapshot_, elapsed_ms);
+    snapshot_.display_page = selected_page;
   }
   present_navigation();
+}
+
+bool PhoneNavBridge::navigation_active() const {
+  const std::lock_guard<std::mutex> lock(state_mutex_);
+  if (demo_active_) return true;
+  if (!link_active_ || ui_phone_connection_ != MOTO_UI_PHONE_ONLINE) {
+    return false;
+  }
+  switch (snapshot_.state) {
+    case moto::nav::NavState::Planning:
+    case moto::nav::NavState::Navigating:
+    case moto::nav::NavState::Rerouting:
+      return true;
+    case moto::nav::NavState::Acquiring:
+      return snapshot_.has_destination;
+    case moto::nav::NavState::Idle:
+    case moto::nav::NavState::Arrived:
+      return false;
+  }
+  return false;
 }
 
 void PhoneNavBridge::set_demo_active(bool active) {
@@ -526,6 +582,9 @@ moto::ble::AckStatus PhoneNavBridge::on_message(
             const std::lock_guard<std::mutex> lock(state_mutex_);
             phone_session_id_ = value.session_id;
             music_page_enabled_ = media;
+            phone_supports_settings_ =
+                value.state == moto::ble::ConnectionState::Ready &&
+                (value.capabilities & moto::ble::CapabilityDeviceSettings) != 0U;
             switch (value.state) {
               case moto::ble::ConnectionState::Ready:
                 ui_phone_connection_ = MOTO_UI_PHONE_ONLINE;
@@ -549,6 +608,9 @@ moto::ble::AckStatus PhoneNavBridge::on_message(
           if (phone_session_id != 0 && value.session_id != phone_session_id) {
             return moto::ble::AckStatus::InvalidState;
           }
+          // Retry until the phone acknowledges its current settings. A
+          // transient notification failure must not leave its controls empty.
+          send_device_settings();
         } else if constexpr (
             std::is_same_v<T, moto::ble::NavigationSnapshot>) {
           consume_navigation(value);
@@ -561,16 +623,94 @@ moto::ble::AckStatus PhoneNavBridge::on_message(
           consume_media(value);
         } else if constexpr (std::is_same_v<T, moto::ble::MapScene>) {
           return consume_map_scene(value);
+        } else if constexpr (std::is_same_v<T, moto::ble::DeviceSettings>) {
+          bool allowed = false;
+          {
+            const std::lock_guard<std::mutex> lock(state_mutex_);
+            allowed = link_active_ && settings_page_enabled_ &&
+                phone_supports_settings_ &&
+                ui_phone_connection_ == MOTO_UI_PHONE_ONLINE;
+          }
+          if (!allowed) return moto::ble::AckStatus::InvalidState;
+          if (!apply_device_settings(value, true)) {
+            return moto::ble::AckStatus::Failed;
+          }
         } else if constexpr (std::is_same_v<T, moto::ble::Ack>) {
+          bool retry_settings = false;
+          if (value.command_id == 0) {
+            const std::lock_guard<std::mutex> lock(state_mutex_);
+            if (settings_sync_pending_ &&
+                value.status == moto::ble::AckStatus::Ok &&
+                device_settings_ == last_settings_sent_) {
+              settings_sync_pending_ = false;
+            } else if (settings_sync_pending_) {
+              retry_settings = true;
+            }
+          }
           ESP_LOGD(kTag, "phone ack sequence=%u command=%u status=%u",
                    value.acknowledged_sequence, value.command_id,
                    static_cast<unsigned>(value.status));
+          if (retry_settings) send_device_settings();
         } else if constexpr (std::is_same_v<T, moto::ble::DeviceCommand>) {
           return moto::ble::AckStatus::Unsupported;
         }
         return moto::ble::AckStatus::Ok;
       },
       decoded.value);
+}
+
+bool PhoneNavBridge::apply_device_settings(
+    const moto::ble::DeviceSettings& settings, bool persist) {
+  bool changed = false;
+  bool saved = true;
+  {
+    const std::lock_guard<std::mutex> lock(state_mutex_);
+    changed = !(device_settings_ == settings);
+    if (persist && changed) {
+      // Serialize the NVS commit with the in-memory update. Touch and BLE
+      // callbacks may request different values at the same time.
+      saved = settings_persist_callback_ != nullptr &&
+          settings_persist_callback_(settings, settings_persist_context_);
+    }
+    if (saved) {
+      device_settings_ = settings;
+      if (persist) settings_sync_pending_ = true;
+    }
+  }
+  if (!saved) {
+    // The local UI has already highlighted the touched option. Restore the
+    // last saved value and avoid echoing an uncommitted value to the phone.
+    request_render(RenderSettings);
+    return false;
+  }
+  if (changed) request_render(RenderSettings);
+  // Echo the accepted value so both controls stay aligned, including when a
+  // phone writes the same value that is already stored on the device.
+  if (persist) send_device_settings();
+  return true;
+}
+
+void PhoneNavBridge::send_device_settings() {
+  SendCallback sender = nullptr;
+  void* sender_context = nullptr;
+  moto::ble::DeviceSettings settings;
+  {
+    const std::lock_guard<std::mutex> lock(state_mutex_);
+    if (sender_ == nullptr || !link_active_ || !settings_sync_pending_ ||
+        ui_phone_connection_ != MOTO_UI_PHONE_ONLINE ||
+        !settings_page_enabled_ || !phone_supports_settings_) {
+      return;
+    }
+    sender = sender_;
+    sender_context = sender_context_;
+    settings = device_settings_;
+  }
+  if (sender(moto::ble::Message{settings},
+             moto::ble::AckRequested | moto::ble::Urgent,
+             sender_context)) {
+    const std::lock_guard<std::mutex> lock(state_mutex_);
+    last_settings_sent_ = settings;
+  }
 }
 
 void PhoneNavBridge::consume_navigation(
@@ -930,6 +1070,8 @@ void PhoneNavBridge::render_pending() {
   const bool navigation = (requested & RenderNavigation) != 0U;
   const bool motion = !navigation && (requested & RenderMotion) != 0U;
   const bool media = (requested & RenderMedia) != 0U;
+  const bool settings_changed = (requested & RenderSettings) != 0U;
+  moto::ble::DeviceSettings settings_snapshot;
   {
     const std::lock_guard<std::mutex> lock(state_mutex_);
     if (navigation || motion) {
@@ -942,6 +1084,9 @@ void PhoneNavBridge::render_pending() {
     }
     if (media) {
       render_media_state_ = media_state_;
+    }
+    if (settings_changed) {
+      settings_snapshot = device_settings_;
     }
   }
 
@@ -988,6 +1133,10 @@ void PhoneNavBridge::render_pending() {
         (render_media_state_.flags & moto::ble::MediaLiked) != 0U;
     moto_nav_ui_set_music_state(&state);
   }
+  if (settings_changed) {
+    moto_nav_ui_set_device_settings(settings_snapshot.brightness_percent,
+                                    settings_snapshot.screen_off_minutes);
+  }
   board_port_unlock();
 }
 
@@ -1006,12 +1155,73 @@ void PhoneNavBridge::run_renderer() {
 
 void PhoneNavBridge::page_changed(moto_ui_page_t page, void* context) {
   auto* self = static_cast<PhoneNavBridge*>(context);
+  if (page == MOTO_UI_PAGE_SETTINGS) {
+    bool enabled = false;
+    {
+      const std::lock_guard<std::mutex> lock(self->state_mutex_);
+      enabled = self->settings_page_enabled_;
+      if (enabled) self->settings_page_active_ = true;
+    }
+    if (enabled) moto_nav_ui_set_page(MOTO_UI_PAGE_SETTINGS);
+    return;
+  }
   {
     const std::lock_guard<std::mutex> lock(self->state_mutex_);
+    self->settings_page_active_ = false;
     self->snapshot_.display_page = map_nav_page(page);
   }
+  // The settings page intentionally ignores phone snapshots, so leave it
+  // explicitly before the next presenter update.
+  moto_nav_ui_set_page(page);
   self->present_navigation();
   self->send_page_command(page);
+}
+
+void PhoneNavBridge::settings_changed(uint8_t brightness_percent,
+                                      uint8_t screen_off_minutes,
+                                      void* context) {
+  auto* self = static_cast<PhoneNavBridge*>(context);
+  moto::ble::DeviceSettings settings;
+  settings.brightness_percent = brightness_percent;
+  settings.screen_off_minutes = screen_off_minutes;
+  self->apply_device_settings(settings, true);
+}
+
+void PhoneNavBridge::select_next_page() {
+  moto_ui_page_t next = MOTO_UI_PAGE_NAVIGATION;
+  {
+    const std::lock_guard<std::mutex> lock(state_mutex_);
+    if (settings_page_active_) {
+      next = MOTO_UI_PAGE_NAVIGATION;
+    } else switch (snapshot_.display_page) {
+      case moto::nav::DisplayPage::Navigation:
+        next = MOTO_UI_PAGE_SPEED;
+        break;
+      case moto::nav::DisplayPage::Speed:
+        next = MOTO_UI_PAGE_COMPASS;
+        break;
+      case moto::nav::DisplayPage::Compass:
+        next = music_page_enabled_ ? MOTO_UI_PAGE_MUSIC
+                                   : (settings_page_enabled_
+                                          ? MOTO_UI_PAGE_SETTINGS
+                                          : MOTO_UI_PAGE_NAVIGATION);
+        break;
+      case moto::nav::DisplayPage::Music:
+        next = settings_page_enabled_ ? MOTO_UI_PAGE_SETTINGS
+                                      : MOTO_UI_PAGE_NAVIGATION;
+        break;
+    }
+    settings_page_active_ = next == MOTO_UI_PAGE_SETTINGS;
+    if (!settings_page_active_) snapshot_.display_page = map_nav_page(next);
+  }
+  if (board_port_lock(UINT32_MAX)) {
+    moto_nav_ui_set_page(next);
+    board_port_unlock();
+  }
+  if (next != MOTO_UI_PAGE_SETTINGS) {
+    present_navigation();
+    send_page_command(next);
+  }
 }
 
 void PhoneNavBridge::music_command(moto_music_command_t command,

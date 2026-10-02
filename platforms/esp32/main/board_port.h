@@ -49,6 +49,15 @@ lv_display_t *board_port_get_display(void);
  */
 esp_err_t board_port_reveal_display(void);
 
+/** Set the visible display brightness from 0 (dark) to 100 (full). */
+esp_err_t board_port_set_display_brightness(uint8_t percent);
+
+/** Last physical screen touch, in milliseconds on the ESP timer clock. */
+uint32_t board_port_last_touch_ms(void);
+
+/** Consume a touch that occurred while the display was dark. */
+bool board_port_take_touch_wake_request(void);
+
 /**
  * Lock LVGL for calls made outside the board-owned LVGL task.
  * timeout_ms == UINT32_MAX means wait indefinitely.
@@ -63,6 +72,12 @@ bool board_port_power_button_pressed(void);
 
 /** Return whether this board exposes a case power button to the application. */
 bool board_port_has_power_button(void);
+
+/** Return whether this board has an application-readable page button. */
+bool board_port_has_page_button(void);
+
+/** Return whether the application-readable page button is held. */
+bool board_port_page_button_pressed(void);
 
 /** Return the initialized shared I2C bus used by the onboard QMI8658. */
 i2c_master_bus_handle_t board_port_i2c_get_handle(void);

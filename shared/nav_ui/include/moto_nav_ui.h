@@ -62,6 +62,7 @@ typedef enum {
     MOTO_UI_PAGE_SPEED,
     MOTO_UI_PAGE_COMPASS,
     MOTO_UI_PAGE_MUSIC,
+    MOTO_UI_PAGE_SETTINGS,
     MOTO_UI_PAGE_COUNT,
 } moto_ui_page_t;
 
@@ -104,10 +105,19 @@ typedef struct {
     uint8_t liked;
 } moto_music_state_t;
 
+typedef struct {
+    uint8_t available;
+    uint8_t percent;
+    uint8_t charging;
+} moto_battery_state_t;
+
 typedef void (*moto_music_command_callback_t)(moto_music_command_t command,
                                                void *context);
 typedef void (*moto_page_change_callback_t)(moto_ui_page_t page,
                                              void *context);
+typedef void (*moto_settings_change_callback_t)(uint8_t brightness_percent,
+                                                 uint8_t screen_off_minutes,
+                                                 void *context);
 typedef void (*moto_demo_change_callback_t)(uint8_t enabled,
                                              void *context);
 
@@ -166,7 +176,16 @@ void moto_nav_ui_set_page_change_callback(
     moto_page_change_callback_t callback,
     void *context);
 void moto_nav_ui_set_music_state(const moto_music_state_t *state);
+/** Update the device battery badge; an unavailable reading hides it. */
+void moto_nav_ui_set_battery_state(const moto_battery_state_t *state);
 void moto_nav_ui_set_music_page_enabled(uint8_t enabled);
+/** Settings are device-local and hidden until the board enables this page. */
+void moto_nav_ui_set_settings_page_enabled(uint8_t enabled);
+/** Reflect the active brightness and idle screen-off choices on the device. */
+void moto_nav_ui_set_device_settings(uint8_t brightness_percent,
+                                     uint8_t screen_off_minutes);
+void moto_nav_ui_set_settings_change_callback(
+    moto_settings_change_callback_t callback, void *context);
 void moto_nav_ui_set_music_command_callback(
     moto_music_command_callback_t callback,
     void *context);

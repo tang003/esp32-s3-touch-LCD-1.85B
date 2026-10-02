@@ -481,6 +481,19 @@ Error validate(const DeviceCommand& value) {
   return value.command_id == 0 ? Error::OutOfRange : Error::None;
 }
 
+Error validate(const DeviceSettings& value) {
+  const bool valid_brightness = value.brightness_percent == 25 ||
+                                value.brightness_percent == 50 ||
+                                value.brightness_percent == 75 ||
+                                value.brightness_percent == 100;
+  const bool valid_screen_off = value.screen_off_minutes == 0 ||
+                                value.screen_off_minutes == 1 ||
+                                value.screen_off_minutes == 3 ||
+                                value.screen_off_minutes == 5;
+  return valid_brightness && valid_screen_off ? Error::None
+                                              : Error::OutOfRange;
+}
+
 template <typename T>
 BytesResult encode_payload(const T& value) {
   const Error validation = validate(value);
@@ -614,6 +627,9 @@ BytesResult encode_payload(const T& value) {
     writer.u16(value.x);
     writer.u16(value.y);
     writer.u32(value.event_time_ms);
+  } else if constexpr (std::is_same_v<T, DeviceSettings>) {
+    writer.u8(value.brightness_percent);
+    writer.u8(value.screen_off_minutes);
   }
   return {writer.take(), Error::None, 0};
 }
@@ -899,6 +915,17 @@ MessageResult decode_device_command(ByteView payload) {
     value.x = reader.u16();
     value.y = reader.u16();
     value.event_time_ms = reader.u32();
+    reader.require_end();
+  }
+  return decoded_result(std::move(value), reader);
+}
+
+MessageResult decode_device_settings(ByteView payload) {
+  Reader reader(payload);
+  DeviceSettings value;
+  if (begin_payload(reader)) {
+    value.brightness_percent = reader.u8();
+    value.screen_off_minutes = reader.u8();
     reader.require_end();
   }
   return decoded_result(std::move(value), reader);
@@ -1454,6 +1481,11 @@ bool DeviceCommand::operator==(const DeviceCommand& rhs) const noexcept {
                   rhs.event_time_ms);
 }
 
+bool DeviceSettings::operator==(const DeviceSettings& rhs) const noexcept {
+  return std::tie(brightness_percent, screen_off_minutes) ==
+         std::tie(rhs.brightness_percent, rhs.screen_off_minutes);
+}
+
 MessageType message_type(const Message& message) noexcept {
   return std::visit(
       [](const auto& value) {
@@ -1474,8 +1506,10 @@ MessageType message_type(const Message& message) noexcept {
           return MessageType::MediaState;
         } else if constexpr (std::is_same_v<T, MapScene>) {
           return MessageType::MapScene;
-        } else {
+        } else if constexpr (std::is_same_v<T, DeviceCommand>) {
           return MessageType::DeviceCommand;
+        } else {
+          return MessageType::DeviceSettings;
         }
       },
       message);
@@ -1502,6 +1536,8 @@ MessageResult decode_message(MessageType type, ByteView payload) {
     case MessageType::MapScene: return decode_map_scene(payload);
     case MessageType::DeviceCommand:
       return decode_device_command(payload);
+    case MessageType::DeviceSettings:
+      return decode_device_settings(payload);
   }
   return {{}, Error::UnknownMessageType, 0};
 }

@@ -117,6 +117,7 @@ enum class MessageType : std::uint8_t {
   MediaState = 0x13,
   MapScene = 0x14,
   DeviceCommand = 0x20,
+  DeviceSettings = 0x21,
 };
 
 enum FrameFlag : std::uint8_t {
@@ -273,6 +274,7 @@ enum Capability : std::uint32_t {
   CapabilityMusicCommands = 1U << 5U,
   CapabilityCommandAck = 1U << 6U,
   CapabilityMapScene = 1U << 7U,
+  CapabilityDeviceSettings = 1U << 8U,
 };
 
 struct ConnectionStatus {
@@ -552,6 +554,15 @@ struct DeviceCommand {
   bool operator==(const DeviceCommand& rhs) const noexcept;
 };
 
+// Sent in either direction. Brightness and screen-off timeout use the same
+// discrete values on the phone and device.
+struct DeviceSettings {
+  std::uint8_t brightness_percent = 100;
+  std::uint8_t screen_off_minutes = 3;
+
+  bool operator==(const DeviceSettings& rhs) const noexcept;
+};
+
 using Message = std::variant<ConnectionStatus,
                              Heartbeat,
                              Ack,
@@ -560,7 +571,8 @@ using Message = std::variant<ConnectionStatus,
                              TrafficDeviation,
                              MediaState,
                              MapScene,
-                             DeviceCommand>;
+                             DeviceCommand,
+                             DeviceSettings>;
 
 using MessageResult = Result<Message>;
 

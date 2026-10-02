@@ -192,6 +192,7 @@ Byte 0 of every logical payload is `payload_revision=1`.
 | `0x13` | MediaState | phone→device | track / playback change, progress at most 1 Hz |
 | `0x14` | MapScene | phone→device | after about 100 m of travel, on crossing an offline tile, or on a route change |
 | `0x20` | DeviceCommand | device→phone | user action, ACK_REQUESTED+URGENT |
+| `0x21` | DeviceSettings | both directions | after handshake and on user edit |
 
 ## 6. Payload encoding
 
@@ -210,7 +211,7 @@ u16 heartbeat_interval_ms  >=250
 ```
 
 Capability bits: bit0 navigation, bit1 route geometry, bit2 traffic, bit3 media state, bit4
-touch commands, bit5 music commands, bit6 command ACK, bit7 map scene.
+touch commands, bit5 music commands, bit6 command ACK, bit7 map scene, bit8 device settings.
 
 ### 6.2 Heartbeat (`0x02`, fixed 11 bytes)
 
@@ -441,6 +442,23 @@ already normalised, so the phone must not infer the direction from the coordinat
 
 The phone deduplicates by `(session_id, command_id)`; success, failure and duplicates all get an
 Ack reply. A UI action must be ACKed Ok only after a successful commit.
+
+### 6.10 DeviceSettings (`0x21`, fixed 3 bytes)
+
+```text
+u8 revision                 1
+u8 brightness_percent       25, 50, 75, or 100
+u8 screen_off_minutes       0 (never), 1, 3, or 5
+```
+
+The 1.85B device owns the saved value. After the final handshake it sends the current settings;
+the phone enables editing only after receiving them. A phone edit sends both fields, and the
+device echoes the accepted value after a successful NVS commit. Device-to-phone `DeviceSettings`
+requests an application ACK and is retried until acknowledged; a failed commit is not echoed.
+The device-local settings page does not use the
+`DisplayPage` enum or send `PageSelected`. Automatic screen-off applies only while navigation is
+inactive; manual screen-off remains available during navigation. Older firmware does not advertise
+bit8, so the phone must not send this message to it.
 
 ## 7. Display Snapshot to the shared NavSnapshot
 

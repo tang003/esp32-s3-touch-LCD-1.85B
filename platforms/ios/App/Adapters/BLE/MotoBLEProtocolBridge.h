@@ -51,6 +51,16 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy) NSString *artistName;
 @end
 
+@interface MotoBLEDeviceSettingsInput : NSObject
+@property(nonatomic) uint8_t brightnessPercent;
+@property(nonatomic) uint8_t screenOffMinutes;
+@end
+
+@interface MotoBLEDeviceSettings : NSObject
+@property(nonatomic, readonly) uint8_t brightnessPercent;
+@property(nonatomic, readonly) uint8_t screenOffMinutes;
+@end
+
 @interface MotoBLEMapPointInput : NSObject
 @property(nonatomic) int32_t latitudeE6;
 @property(nonatomic) int32_t longitudeE6;
@@ -117,6 +127,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, nullable) MotoBLEHeartbeat *heartbeat;
 @property(nonatomic, readonly, nullable) MotoBLEAcknowledgement *acknowledgement;
 @property(nonatomic, readonly, nullable) MotoBLEDeviceCommand *deviceCommand;
+@property(nonatomic, readonly, nullable) MotoBLEDeviceSettings *deviceSettings;
 @end
 
 /// Thin Objective-C++ bridge over shared/ble_protocol. No wire constants or
@@ -127,6 +138,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSString *)serviceUUIDString;
 + (NSString *)phoneToDeviceUUIDString;
 + (NSString *)deviceToPhoneUUIDString;
++ (uint32_t)deviceSettingsCapability;
 
 - (instancetype)initWithMaximumFrameSize:(NSUInteger)maximumFrameSize;
 
@@ -160,6 +172,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (nullable NSArray<NSData *> *)encodeMediaState:(MotoBLEMediaStateInput *)state
                                            error:(NSError **)error;
+
+- (nullable NSArray<NSData *> *)encodeDeviceSettings:(MotoBLEDeviceSettingsInput *)settings
+                                               error:(NSError **)error;
 
 - (nullable NSArray<NSData *> *)encodeMapScene:(MotoBLEMapSceneInput *)scene
                                           error:(NSError **)error;

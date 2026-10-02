@@ -4,11 +4,11 @@
 
 # MOTO GPS Waveshare edition features and user manual
 
-This manual corresponds to the repository's current Waveshare 1.75C firmware and iOS App. For a first
+This manual corresponds to the repository's current Waveshare 1.75C and 1.85B firmware and iOS App. For a first
 build, read the [buying and installation guide](WAVESHARE_DIY_GUIDE.en.md) first; for service
 configuration see the [route gateway guide](GATEWAY_SETUP.en.md).
 
-Updated 2026-09-16. This is a development build; TestFlight and App Store downloads are not yet open.
+Updated 2026-10-01. This is a development build; TestFlight and App Store downloads are not yet open.
 The redesigned native iOS interface groups search, recent places, "My round display", "Maps and offline
 downloads", "Demo navigation" and "Privacy and data" on the "Set off" home page. The B1 custom board
 is on hold while work focuses on the Waveshare edition. English UI labels in this manual describe the
@@ -52,11 +52,12 @@ complete while the round display stays at ready to ride. The phone's physical Bl
 the complete protocol handshake are two stages, so the standard is that both the App and the round
 display are ready.
 
-To stop using it, first end navigation in the App, then hold the device's PWR button for about
-3 seconds to request a software power-off. The firmware also configures a PMIC hardware long-press
-fallback at about 4 seconds; the actual power-down / wake behaviour on USB, battery and combined
-supply still awaits full acceptance. To power it on again, follow Waveshare's device instructions.
-BOOT is the download / debug button, not a page-switching or everyday power-off button.
+To stop using it, first end navigation in the App. On the 1.75C, hold PWR for about 3 seconds to
+request a software power-off; its PMIC also has an approximately 4-second hardware fallback. The
+USB, battery and combined-supply behaviour still awaits full acceptance. On the 1.85B, PWR belongs
+to the board's power circuit; follow Waveshare's power instructions. On the 1.85B, a short BOOT press
+changes pages while the screen is lit, and holding it for about 1.5 seconds turns off the backlight.
+Holding BOOT during power-on still enters download mode.
 
 ## 3. Search and recent places
 
@@ -121,11 +122,30 @@ its capacity. See section 10 for downloads.
 
 ## 6. Speedometer, heading and touch
 
-Swipe left and right on the round display to switch pages. Swiping left cycles navigation →
-speedometer → heading → music, and swiping right goes the other way; when the music capability is not
-enabled the music page is skipped. The page indicator dots appear after a touch / page change and
+Swipe left and right on the round display to switch pages. On the 1.85B, swiping left cycles navigation →
+speedometer → heading → music → settings, and swiping right goes the other way; when the music capability is not
+enabled the music page is skipped. The 1.75C does not show the settings page. The page indicator dots appear after a touch / page change and
 retract after about 5 seconds of no operation. Use a fairly definite horizontal swipe; operating in
 the middle of the round display is easier to recognise.
+On the 1.85B, a short BOOT press and release also advances one page in the same order, skipping music
+when unavailable. Holding BOOT for about 1.5 seconds turns off the backlight without changing pages.
+When the screen is dark, a short BOOT press wakes it without changing pages. Touch also wakes it;
+the first touch does not activate any page control.
+
+The settings page offers brightness choices of 25%, 50%, 75%, and 100%, plus idle screen-off after
+never, 1, 3, or 5 minutes. The iPhone's “My display” sheet has the same controls. It reads the device's
+current values after connection and sends changes back; the device stores the selected values for restart.
+The defaults are 100% brightness and 3-minute idle screen-off. During active navigation the screen does
+not turn off automatically, but a long BOOT press can still turn it off manually. Without active navigation,
+the backlight dims to at most 25% after one third of the selected timeout and turns off at the timeout.
+Only the backlight turns off: the device, BLE connection and navigation processing continue to run. Use PWR
+to turn off the whole board after the ride. The device settings page compiles locally and awaits
+flashing and hardware verification; the iPhone settings page awaits an iOS build and live check.
+
+The 1.85B shows device battery percentage near the upper right. A green charging mark appears when
+the gauge detects charge current; the number turns red at 20% or less. No percentage is shown until
+the gauge has a valid reading. Accuracy still needs checking with the connected battery on hardware.
+The 1.75C does not yet display device battery level.
 
 The speedometer page shows the speed and `km/h`. The speed depends on a valid position fix or on demo
 input, and is not the same as the result of calibrating the vehicle's original instrument. When the

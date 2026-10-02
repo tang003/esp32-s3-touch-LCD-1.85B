@@ -246,7 +246,8 @@ moto::ble::ConnectionStatus PhoneConnectionStatus(
                         moto::ble::CapabilityTouchCommands |
                         moto::ble::CapabilityMusicCommands |
                         moto::ble::CapabilityCommandAck |
-                        moto::ble::CapabilityMapScene;
+                        moto::ble::CapabilityMapScene |
+                        moto::ble::CapabilityDeviceSettings;
   status.session_id = session_id;
   status.max_frame_size =
       static_cast<std::uint16_t>(storage->maximum_frame_size);
@@ -286,6 +287,17 @@ moto::ble::ConnectionStatus PhoneConnectionStatus(
   return self;
 }
 
+@end
+
+@implementation MotoBLEDeviceSettingsInput
+@end
+
+@interface MotoBLEDeviceSettings ()
+@property(nonatomic, readwrite) uint8_t brightnessPercent;
+@property(nonatomic, readwrite) uint8_t screenOffMinutes;
+@end
+
+@implementation MotoBLEDeviceSettings
 @end
 
 @implementation MotoBLEMapPointInput
@@ -376,6 +388,7 @@ moto::ble::ConnectionStatus PhoneConnectionStatus(
 @property(nonatomic, readwrite, nullable) MotoBLEHeartbeat *heartbeat;
 @property(nonatomic, readwrite, nullable) MotoBLEAcknowledgement *acknowledgement;
 @property(nonatomic, readwrite, nullable) MotoBLEDeviceCommand *deviceCommand;
+@property(nonatomic, readwrite, nullable) MotoBLEDeviceSettings *deviceSettings;
 @end
 
 @implementation MotoBLEInboundMessage
@@ -399,6 +412,10 @@ moto::ble::ConnectionStatus PhoneConnectionStatus(
 
 + (NSString *)deviceToPhoneUUIDString {
   return [NSString stringWithUTF8String:moto::ble::kDeviceToPhoneUuid];
+}
+
++ (uint32_t)deviceSettingsCapability {
+  return moto::ble::CapabilityDeviceSettings;
 }
 
 - (instancetype)initWithMaximumFrameSize:(NSUInteger)maximumFrameSize {
@@ -504,6 +521,15 @@ moto::ble::ConnectionStatus PhoneConnectionStatus(
                        0, error);
 }
 
+- (NSArray<NSData *> *)encodeDeviceSettings:(MotoBLEDeviceSettingsInput *)input
+                                      error:(NSError **)error {
+  auto *storage = static_cast<CodecStorage *>(_storage);
+  moto::ble::DeviceSettings settings;
+  settings.brightness_percent = input.brightnessPercent;
+  settings.screen_off_minutes = input.screenOffMinutes;
+  return EncodeMessage(storage, moto::ble::Message{settings}, 0, error);
+}
+
 - (NSArray<NSData *> *)encodeMapScene:(MotoBLEMapSceneInput *)input
                                  error:(NSError **)error {
   auto *storage = static_cast<CodecStorage *>(_storage);
@@ -599,6 +625,15 @@ moto::ble::ConnectionStatus PhoneConnectionStatus(
     value.acknowledgedSequence = ack->acknowledged_sequence;
     value.status = static_cast<uint8_t>(ack->status);
     inbound.acknowledgement = value;
+    return inbound;
+  }
+
+  if (const auto *settings =
+          std::get_if<moto::ble::DeviceSettings>(&decoded.value)) {
+    MotoBLEDeviceSettings *value = [[MotoBLEDeviceSettings alloc] init];
+    value.brightnessPercent = settings->brightness_percent;
+    value.screenOffMinutes = settings->screen_off_minutes;
+    inbound.deviceSettings = value;
     return inbound;
   }
 

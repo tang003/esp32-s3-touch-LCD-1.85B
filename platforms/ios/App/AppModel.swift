@@ -155,6 +155,30 @@ final class AppModel: ObservableObject {
         return false
     }
 
+    var deviceSettingsSupported: Bool {
+        deviceReady && device.settingsSupported
+    }
+
+    var deviceSettings: BLEDeviceSettings? {
+        deviceSettingsSupported ? device.settings : nil
+    }
+
+    func setDeviceBrightness(_ percent: UInt8) {
+        guard let current = deviceSettings else { return }
+        bluetooth.sendDeviceSettings(
+            brightnessPercent: percent,
+            screenOffMinutes: current.screenOffMinutes
+        )
+    }
+
+    func setDeviceScreenOffMinutes(_ minutes: UInt8) {
+        guard let current = deviceSettings else { return }
+        bluetooth.sendDeviceSettings(
+            brightnessPercent: current.brightnessPercent,
+            screenOffMinutes: minutes
+        )
+    }
+
     /// Navigation can start before BLE is ready. The central retains the newest
     /// snapshot and synchronizes it when the round display reconnects.
     var canStartNavigation: Bool {

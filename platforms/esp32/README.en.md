@@ -7,10 +7,11 @@
 This directory supports two boards. The default configuration targets the user's
 **ESP32-S3-Touch-LCD-1.85B**. Check the full model name before building: the display,
 touch controller and flash capacity differ.
-The 1.85B firmware has been flashed to the physical board. Serial logs confirm
-display, touch, BLE advertising and QMI8658 initialization; no further draw-buffer
-memory errors appeared after the fix. Visual output, touch operation and phone
-connection still need physical acceptance.
+An earlier 1.85B firmware has been flashed to the physical board. The user confirmed
+the display, touch, phone BLE connection and e-bike navigation. The shorter swipe
+threshold works, although swiping from the compass page still needs refinement.
+The new BOOT page button, battery badge and screen power policy compile locally and await flashing
+and on-device verification.
 
 | Board | Display / touch | Resolution | Flash | PSRAM |
 | --- | --- | ---: | ---: | ---: |
@@ -85,6 +86,11 @@ Bluetooth pairing in the iPhone.
   the phone to select a route and does not draw an empty route as `0 m`.
 - Swipe left and right to change pages; the page dots hide after five seconds. Whether the music page
   is available depends on the capabilities the phone declares.
+- On the 1.85B, a short BOOT press changes pages while lit; holding it for about 1.5 seconds turns
+  off the backlight. When dark, a short BOOT press only wakes the screen. Touch also wakes it, and
+  the first touch does not activate a page control.
+- The 1.85B does not turn off automatically during active navigation; manual screen-off remains available. With no active navigation, it dims the backlight to
+  25% after 60 seconds of inactivity and turns it off after 180 seconds. The board and BLE keep running.
 - On the 1.75C, holding PWR for about three seconds requests shutdown from the AXP2101; on USB
   power there is a deep-sleep fallback. The 1.85B's PWR is a hardware power button and does not
   use this AXP2101 behavior.

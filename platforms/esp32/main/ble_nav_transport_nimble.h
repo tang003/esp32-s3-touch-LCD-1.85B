@@ -21,6 +21,7 @@ class BleNavTransport {
   using MessageCallback = moto::ble::AckStatus (*)(
       const moto::ble::ReassembledMessage& message, void* context);
   using LinkCallback = void (*)(bool active, void* context);
+  using ReadyCallback = void (*)(void* context);
 
   BleNavTransport();
   BleNavTransport(const BleNavTransport&) = delete;
@@ -28,6 +29,7 @@ class BleNavTransport {
 
   void set_callbacks(MessageCallback message_callback,
                      LinkCallback link_callback,
+                     ReadyCallback ready_callback,
                      void* context) noexcept;
   esp_err_t start();
   bool send_message(const moto::ble::Message& message,
@@ -89,7 +91,7 @@ class BleNavTransport {
   void send_ack(std::uint16_t sequence,
                 moto::ble::AckStatus status,
                 std::uint16_t command_id = 0);
-  void accept_ack(const moto::ble::Ack& ack);
+  bool accept_ack(const moto::ble::Ack& ack);
   void service_pending_ack(std::uint64_t now_ms);
   bool notify_frames(const std::vector<moto::ble::Bytes>& frames);
   std::size_t negotiated_frame_size() const noexcept;
@@ -98,6 +100,7 @@ class BleNavTransport {
 
   MessageCallback message_callback_ = nullptr;
   LinkCallback link_callback_ = nullptr;
+  ReadyCallback ready_callback_ = nullptr;
   void* callback_context_ = nullptr;
   QueueHandle_t rx_queue_ = nullptr;
   SemaphoreHandle_t tx_mutex_ = nullptr;

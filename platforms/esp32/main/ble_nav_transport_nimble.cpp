@@ -15,6 +15,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "nvs_flash.h"
 #include "os/os_mbuf.h"
+#include "sdkconfig.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
@@ -51,9 +52,11 @@ BleNavTransport::BleNavTransport() = default;
 
 void BleNavTransport::set_callbacks(MessageCallback message_callback,
                                     LinkCallback link_callback,
+                                    ReadyCallback ready_callback,
                                     void* context) noexcept {
   message_callback_ = message_callback;
   link_callback_ = link_callback;
+  ready_callback_ = ready_callback;
   callback_context_ = context;
 }
 
@@ -485,7 +488,8 @@ void BleNavTransport::run_rx_worker() {
           decoded.ok() ? std::get_if<moto::ble::Ack>(&decoded.value) : nullptr;
 
       if (received_ack != nullptr) {
-        accept_ack(*received_ack);
+        // Old or duplicate ACKs must not confirm a newer settings value.
+        if (!accept_ack(*received_ack)) continue;
       }
 
       bool reset_for_new_session = false;
@@ -560,6 +564,11 @@ void BleNavTransport::run_rx_worker() {
             // gate, so the iOS side cannot wait forever for our status.
             send_connection_status(moto::ble::ConnectionState::Ready);
             protocol_ready = true;
+            // Business notifications must follow the final Ready frame. The
+            // phone drops them until it has processed that frame.
+            if (ready_callback_ != nullptr) {
+              ready_callback_(callback_context_);
+            }
           }
         }
       }
@@ -620,6 +629,9 @@ void BleNavTransport::send_connection_status(
                         moto::ble::CapabilityMusicCommands |
                         moto::ble::CapabilityCommandAck |
                         moto::ble::CapabilityMapScene;
+#if CONFIG_MOTO_BOARD_WAVESHARE_1_85B
+  status.capabilities |= moto::ble::CapabilityDeviceSettings;
+#endif
   status.session_id = session_id;
   status.max_frame_size =
       static_cast<std::uint16_t>(negotiated_frame_size());
@@ -637,10 +649,11 @@ void BleNavTransport::send_ack(std::uint16_t sequence,
   send_message(moto::ble::Message{ack});
 }
 
-void BleNavTransport::accept_ack(const moto::ble::Ack& ack) {
+bool BleNavTransport::accept_ack(const moto::ble::Ack& ack) {
   if (xSemaphoreTake(tx_mutex_, pdMS_TO_TICKS(100)) != pdTRUE) {
-    return;
+    return false;
   }
+  bool matched = false;
   if (pending_ack_.active &&
       pending_ack_.sequence == ack.acknowledged_sequence &&
       pending_ack_.command_id == ack.command_id) {
@@ -648,8 +661,10 @@ void BleNavTransport::accept_ack(const moto::ble::Ack& ack) {
              ack.acknowledged_sequence, ack.command_id,
              static_cast<unsigned>(ack.status));
     pending_ack_ = {};
+    matched = true;
   }
   xSemaphoreGive(tx_mutex_);
+  return matched;
 }
 
 void BleNavTransport::service_pending_ack(std::uint64_t now_ms) {

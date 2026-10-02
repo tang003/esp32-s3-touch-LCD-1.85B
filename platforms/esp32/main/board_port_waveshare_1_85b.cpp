@@ -5,6 +5,7 @@
 
 #include "board_port.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -23,6 +24,7 @@
 #include "esp_lcd_touch_cst816s.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -41,7 +43,7 @@ constexpr gpio_num_t kBacklight = GPIO_NUM_5;
 constexpr gpio_num_t kTouchScl = GPIO_NUM_10;
 constexpr gpio_num_t kTouchSda = GPIO_NUM_11;
 constexpr gpio_num_t kTouchReset = GPIO_NUM_1;
-constexpr gpio_num_t kTouchInterrupt = GPIO_NUM_4;
+constexpr gpio_num_t kPageButton = GPIO_NUM_0;
 // LVGL's 50 px / 3 px-per-sample defaults miss short swipes on this 360 px
 // round screen. Keep the tuning local to the 1.85B input device.
 constexpr std::uint8_t kSwipeMinDistancePx = 30;
@@ -73,6 +75,12 @@ i2c_master_bus_handle_t i2c_bus = nullptr;
 void* lvgl_extra_pool_storage = nullptr;
 bool init_started = false;
 bool display_revealed = false;
+bool page_button_ready = false;
+std::atomic<bool> display_dark{false};
+std::atomic<bool> touch_wake_requested{false};
+std::atomic<std::uint32_t> last_touch_ms{0};
+// These fields are only accessed by the LVGL input worker.
+bool suppress_wake_touch = false;
 
 // Exact Waveshare panel revision 1 register sequence; order matters.
 static const std::uint8_t kInitDataVersion1[] = {
@@ -504,6 +512,36 @@ esp_err_t initialize_backlight() {
   return ESP_OK;
 }
 
+esp_err_t read_touch_for_screen_wake(esp_lcd_touch_handle_t touch,
+                                     esp_lcd_touch_point_data_t* points,
+                                     std::uint8_t* count,
+                                     std::uint8_t max_count, void*) {
+  ESP_RETURN_ON_ERROR(esp_lcd_touch_read_data(touch), kTag,
+                      "CST816S touch read failed");
+  ESP_RETURN_ON_ERROR(esp_lcd_touch_get_data(touch, points, count, max_count),
+                      kTag, "CST816S touch point read failed");
+  const std::uint32_t now_ms =
+      static_cast<std::uint32_t>(esp_timer_get_time() / 1'000);
+  const bool pressed = *count != 0;
+  if (pressed) {
+    last_touch_ms.store(now_ms, std::memory_order_release);
+    if (display_dark.load(std::memory_order_acquire)) {
+      touch_wake_requested.store(true, std::memory_order_release);
+      suppress_wake_touch = true;
+    }
+  }
+  // A wake touch must not also activate a music control or swipe a page.
+  // Polling continues until the controller reports release, so the entire
+  // waking gesture is consumed even when the user holds a finger down.
+  if (suppress_wake_touch) {
+    *count = 0;
+    if (!pressed) {
+      suppress_wake_touch = false;
+    }
+  }
+  return ESP_OK;
+}
+
 esp_err_t reset_panel_for_id_read() {
   gpio_config_t reset_config{};
   reset_config.pin_bit_mask = 1ULL << kLcdReset;
@@ -654,7 +692,9 @@ esp_err_t initialize_touch(esp_lcd_touch_handle_t* touch_out) {
   touch_config.x_max = MOTO_DISPLAY_WIDTH;
   touch_config.y_max = MOTO_DISPLAY_HEIGHT;
   touch_config.rst_gpio_num = kTouchReset;
-  touch_config.int_gpio_num = kTouchInterrupt;
+  // Poll at LVGL's 25 ms input cadence. This guarantees observing release so
+  // the first touch used to wake a dark screen cannot leak into the UI.
+  touch_config.int_gpio_num = GPIO_NUM_NC;
   touch_config.levels.reset = 0;
   touch_config.levels.interrupt = 0;
   // Waveshare's exact 1.85B BSP uses native 0-degree orientation.
@@ -708,8 +748,9 @@ extern "C" esp_err_t board_port_init(void) {
   esp_lcd_touch_handle_t touch = nullptr;
   ESP_RETURN_ON_ERROR(initialize_touch(&touch), kTag,
                       "Waveshare CST816S initialization failed");
-  const esp_lv_adapter_touch_config_t touch_config =
+  esp_lv_adapter_touch_config_t touch_config =
       ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(display, touch);
+  touch_config.callbacks.custom_touch_read = read_touch_for_screen_wake;
   lv_indev_t* const touch_input = esp_lv_adapter_register_touch(&touch_config);
   if (touch_input == nullptr) {
     ESP_LOGE(kTag, "LVGL could not register the CST816S touch device");
@@ -717,6 +758,22 @@ extern "C" esp_err_t board_port_init(void) {
   }
   lv_indev_set_gesture_min_distance(touch_input, kSwipeMinDistancePx);
   lv_indev_set_gesture_min_velocity(touch_input, kSwipeMinVelocityPx);
+
+  // BOOT is GPIO0. It is sampled for download mode only during reset; after
+  // startup the existing key can also be read without changing its boot role.
+  gpio_config_t page_button_config{};
+  page_button_config.pin_bit_mask = 1ULL << kPageButton;
+  page_button_config.mode = GPIO_MODE_INPUT;
+  page_button_config.pull_up_en = GPIO_PULLUP_ENABLE;
+  page_button_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  page_button_config.intr_type = GPIO_INTR_DISABLE;
+  const esp_err_t page_button_result = gpio_config(&page_button_config);
+  if (page_button_result == ESP_OK) {
+    page_button_ready = true;
+  } else {
+    ESP_LOGW(kTag, "BOOT page button unavailable: %s",
+             esp_err_to_name(page_button_result));
+  }
 
   lv_obj_t* const startup_screen = lv_display_get_screen_active(display);
   lv_obj_set_style_bg_color(startup_screen, lv_color_black(), 0);
@@ -758,6 +815,39 @@ extern "C" esp_err_t board_port_reveal_display(void) {
   return ESP_OK;
 }
 
+extern "C" esp_err_t board_port_set_display_brightness(std::uint8_t percent) {
+  if (!display_revealed) return ESP_ERR_INVALID_STATE;
+  if (percent > 100U) return ESP_ERR_INVALID_ARG;
+  const bool was_dark = display_dark.load(std::memory_order_acquire);
+  const bool going_dark = percent == 0U;
+  // Mark the screen dark before the PWM reaches zero, so a simultaneous touch
+  // is consumed rather than reaching an invisible UI control.
+  if (going_dark) display_dark.store(true, std::memory_order_release);
+  const std::uint32_t duty = kBacklightMaxDuty * percent / 100U;
+  const esp_err_t duty_result =
+      ledc_set_duty(kBacklightLedcMode, kBacklightLedcChannel, duty);
+  if (duty_result != ESP_OK) {
+    display_dark.store(was_dark, std::memory_order_release);
+    return duty_result;
+  }
+  const esp_err_t update_result =
+      ledc_update_duty(kBacklightLedcMode, kBacklightLedcChannel);
+  if (update_result != ESP_OK) {
+    display_dark.store(was_dark, std::memory_order_release);
+    return update_result;
+  }
+  if (!going_dark) display_dark.store(false, std::memory_order_release);
+  return ESP_OK;
+}
+
+extern "C" std::uint32_t board_port_last_touch_ms(void) {
+  return last_touch_ms.load(std::memory_order_acquire);
+}
+
+extern "C" bool board_port_take_touch_wake_request(void) {
+  return touch_wake_requested.exchange(false, std::memory_order_acq_rel);
+}
+
 extern "C" bool board_port_lock(std::uint32_t timeout_ms) {
   if (display == nullptr) return false;
   const std::int32_t adapter_timeout =
@@ -778,6 +868,14 @@ extern "C" void board_port_unlock(void) {
 extern "C" bool board_port_power_button_pressed(void) { return false; }
 
 extern "C" bool board_port_has_power_button(void) { return false; }
+
+extern "C" bool board_port_has_page_button(void) {
+  return page_button_ready;
+}
+
+extern "C" bool board_port_page_button_pressed(void) {
+  return page_button_ready && gpio_get_level(kPageButton) == 0;
+}
 
 extern "C" i2c_master_bus_handle_t board_port_i2c_get_handle(void) {
   return i2c_bus;

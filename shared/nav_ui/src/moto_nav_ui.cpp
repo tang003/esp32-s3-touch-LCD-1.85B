@@ -35,6 +35,8 @@ constexpr int kCompassTickCount = 24;
 constexpr int kSpeedTickCount = 18;
 constexpr int kDesignWidth = 360;
 constexpr std::uint32_t kPageDotsVisibleMs = 5'000;
+constexpr std::uint8_t kBrightnessChoices[4] = {25, 50, 75, 100};
+constexpr std::uint8_t kScreenOffChoices[4] = {0, 1, 3, 5};
 // Keep LVGL, the UI interpolation timer and IMU presentation on the same
 // 40 Hz cadence. The previous 40/33 ms mismatch periodically produced a
 // 66 ms visual gap even when both tasks were otherwise keeping up.
@@ -74,6 +76,9 @@ struct Ui {
     lv_obj_t *screen = nullptr;
     lv_obj_t *pages[MOTO_UI_PAGE_COUNT]{};
     lv_obj_t *page_dots[MOTO_UI_PAGE_COUNT]{};
+    lv_obj_t *battery_badge = nullptr;
+    lv_obj_t *battery_label = nullptr;
+    lv_obj_t *battery_charge = nullptr;
     lv_timer_t *page_dots_timer = nullptr;
     moto_ui_page_t page = MOTO_UI_PAGE_NAVIGATION;
     bool page_dots_visible = true;
@@ -171,13 +176,23 @@ struct Ui {
     char music_title_text[64]{};
     char music_artist_text[48]{};
 
+    lv_obj_t *brightness_buttons[4]{};
+    lv_obj_t *brightness_button_labels[4]{};
+    lv_obj_t *screen_off_buttons[4]{};
+    lv_obj_t *screen_off_button_labels[4]{};
+    std::uint8_t brightness_percent = 100;
+    std::uint8_t screen_off_minutes = 3;
+
     moto_music_command_callback_t music_callback = nullptr;
     void *music_callback_context = nullptr;
     moto_page_change_callback_t page_callback = nullptr;
     void *page_callback_context = nullptr;
+    moto_settings_change_callback_t settings_callback = nullptr;
+    void *settings_callback_context = nullptr;
     moto_demo_change_callback_t demo_callback = nullptr;
     void *demo_callback_context = nullptr;
     bool music_page_enabled = true;
+    bool settings_page_enabled = false;
     bool demo_active = false;
     bool reduce_motion = false;
 } ui;
@@ -198,6 +213,8 @@ void reset_ui_state() {
     ui.lifecycle_visual = LifecycleVisual::Hidden;
     ui.lifecycle_target = LifecycleVisual::Hidden;
     ui.music_page_enabled = true;
+    ui.brightness_percent = 100;
+    ui.screen_off_minutes = 3;
     // Force the first geometry payload to bind every mutable LVGL line even
     // when its protocol revision happens to start at zero.
     ui.nav_route_generation = ~std::uint32_t{0};
@@ -274,14 +291,30 @@ void draw_vehicle_marker(lv_event_t *event) {
     lv_draw_triangle(layer, &triangle);
 }
 
+bool page_available(moto_ui_page_t page) {
+    return (page != MOTO_UI_PAGE_MUSIC || ui.music_page_enabled) &&
+           (page != MOTO_UI_PAGE_SETTINGS || ui.settings_page_enabled);
+}
+
 void update_page_dots() {
+    int visible_count = 0;
+    for(int i = 0; i < MOTO_UI_PAGE_COUNT; ++i) {
+        if(page_available(static_cast<moto_ui_page_t>(i))) ++visible_count;
+    }
+    const int first_x =
+        (kDesignWidth - (visible_count - 1) * 22 - 5) / 2;
+    int visible_index = 0;
     for(int i = 0; i < MOTO_UI_PAGE_COUNT; ++i) {
         const bool active = i == static_cast<int>(ui.page);
         lv_obj_set_size(ui.page_dots[i], px(active ? 16 : 5), px(5));
         lv_obj_set_style_radius(ui.page_dots[i], px(3), 0);
         lv_obj_set_style_bg_color(ui.page_dots[i], active ? kWhite : kGraphite, 0);
-        lv_obj_set_x(ui.page_dots[i], px(145 + i * 22 - (active ? 5 : 0)));
-        const bool available = i != MOTO_UI_PAGE_MUSIC || ui.music_page_enabled;
+        const bool available = page_available(static_cast<moto_ui_page_t>(i));
+        if(available) {
+            lv_obj_set_x(ui.page_dots[i],
+                         px(first_x + visible_index * 22 - (active ? 5 : 0)));
+            ++visible_index;
+        }
         if(ui.page_dots_visible && available) {
             lv_obj_remove_flag(ui.page_dots[i], LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -323,7 +356,7 @@ void install_interaction_wake(lv_obj_t *object) {
 
 void show_page(moto_ui_page_t page, bool reveal_on_same_page = false) {
     if(page < MOTO_UI_PAGE_NAVIGATION || page >= MOTO_UI_PAGE_COUNT) return;
-    if(page == MOTO_UI_PAGE_MUSIC && !ui.music_page_enabled) {
+    if(!page_available(page)) {
         page = MOTO_UI_PAGE_NAVIGATION;
     }
     const bool changed = page != ui.page;
@@ -345,17 +378,15 @@ void gesture_event(lv_event_t *) {
     lv_indev_t *indev = lv_indev_active();
     if(indev == nullptr) return;
     const lv_dir_t direction = lv_indev_get_gesture_dir(indev);
-    int next = static_cast<int>(ui.page);
-    if(direction == LV_DIR_LEFT) {
-        next = (next + 1) % MOTO_UI_PAGE_COUNT;
-    } else if(direction == LV_DIR_RIGHT) {
-        next = (next + MOTO_UI_PAGE_COUNT - 1) % MOTO_UI_PAGE_COUNT;
-    } else {
+    const int step = direction == LV_DIR_LEFT ? 1 :
+                     direction == LV_DIR_RIGHT ? -1 : 0;
+    if(step == 0) {
         return;
     }
-    if(!ui.music_page_enabled && next == MOTO_UI_PAGE_MUSIC) {
-        next = direction == LV_DIR_LEFT ? MOTO_UI_PAGE_NAVIGATION
-                                        : MOTO_UI_PAGE_COMPASS;
+    int next = static_cast<int>(ui.page);
+    for(int attempt = 0; attempt < MOTO_UI_PAGE_COUNT; ++attempt) {
+        next = (next + step + MOTO_UI_PAGE_COUNT) % MOTO_UI_PAGE_COUNT;
+        if(page_available(static_cast<moto_ui_page_t>(next))) break;
     }
     const auto requested = static_cast<moto_ui_page_t>(next);
     if(ui.page_callback != nullptr) {
@@ -1506,6 +1537,56 @@ void music_button_event(lv_event_t *event) {
     if(ui.music_callback != nullptr) ui.music_callback(command, ui.music_callback_context);
 }
 
+void update_settings_view() {
+    for(int i = 0; i < 4; ++i) {
+        if(ui.brightness_buttons[i] == nullptr ||
+           ui.screen_off_buttons[i] == nullptr) return;
+        const bool brightness_selected =
+            ui.brightness_percent == kBrightnessChoices[i];
+        const bool screen_off_selected =
+            ui.screen_off_minutes == kScreenOffChoices[i];
+        lv_obj_set_style_bg_color(ui.brightness_buttons[i],
+                                  brightness_selected ? kAmber : kGraphite, 0);
+        lv_obj_set_style_bg_color(ui.brightness_buttons[i],
+                                  brightness_selected ? kAmber : kGraphite,
+                                  LV_STATE_PRESSED);
+        lv_obj_set_style_text_color(ui.brightness_button_labels[i],
+                                     brightness_selected ? kBlack : kWhite, 0);
+        lv_obj_set_style_bg_color(ui.screen_off_buttons[i],
+                                  screen_off_selected ? kAmber : kGraphite, 0);
+        lv_obj_set_style_bg_color(ui.screen_off_buttons[i],
+                                  screen_off_selected ? kAmber : kGraphite,
+                                  LV_STATE_PRESSED);
+        lv_obj_set_style_text_color(ui.screen_off_button_labels[i],
+                                     screen_off_selected ? kBlack : kWhite, 0);
+    }
+}
+
+void settings_choice_event(lv_event_t *event) {
+    const lv_obj_t *target = lv_event_get_target_obj(event);
+    bool changed = false;
+    for(int i = 0; i < 4; ++i) {
+        if(target == ui.brightness_buttons[i] &&
+           ui.brightness_percent != kBrightnessChoices[i]) {
+            ui.brightness_percent = kBrightnessChoices[i];
+            changed = true;
+            break;
+        }
+        if(target == ui.screen_off_buttons[i] &&
+           ui.screen_off_minutes != kScreenOffChoices[i]) {
+            ui.screen_off_minutes = kScreenOffChoices[i];
+            changed = true;
+            break;
+        }
+    }
+    if(!changed) return;
+    update_settings_view();
+    if(ui.settings_callback != nullptr) {
+        ui.settings_callback(ui.brightness_percent, ui.screen_off_minutes,
+                             ui.settings_callback_context);
+    }
+}
+
 void create_page_dots() {
     for(int i = 0; i < MOTO_UI_PAGE_COUNT; ++i) {
         ui.page_dots[i] = lv_obj_create(ui.screen);
@@ -1520,6 +1601,32 @@ void create_page_dots() {
                                          kPageDotsVisibleMs, nullptr);
     update_page_dots();
     reveal_page_dots();
+}
+
+void create_battery_badge() {
+    // Screen-level overlay remains visible when the navigation lifecycle
+    // replaces its page content and when the user switches pages.
+    ui.battery_badge = lv_obj_create(ui.screen);
+    lv_obj_set_size(ui.battery_badge, px(66), px(24));
+    lv_obj_set_pos(ui.battery_badge, px(256), px(76));
+    lv_obj_set_style_radius(ui.battery_badge, px(12), 0);
+    lv_obj_set_style_bg_color(ui.battery_badge, kBlack, 0);
+    lv_obj_set_style_bg_opa(ui.battery_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(ui.battery_badge, kGraphite, 0);
+    lv_obj_set_style_border_width(ui.battery_badge, px(1), 0);
+    lv_obj_set_style_pad_all(ui.battery_badge, 0, 0);
+    lv_obj_clear_flag(ui.battery_badge, LV_OBJ_FLAG_CLICKABLE);
+    ui.battery_label = make_label(ui.battery_badge,
+                                  &lv_font_montserrat_16, kWhite, "");
+    lv_obj_clear_flag(ui.battery_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_center(ui.battery_label);
+    ui.battery_charge = make_label(ui.battery_badge,
+                                   &lv_font_montserrat_16, kGreen,
+                                   LV_SYMBOL_CHARGE);
+    lv_obj_clear_flag(ui.battery_charge, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(ui.battery_charge, LV_ALIGN_RIGHT_MID, -px(4), 0);
+    lv_obj_add_flag(ui.battery_charge, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ui.battery_badge, LV_OBJ_FLAG_HIDDEN);
 }
 
 void create_navigation_page() {
@@ -1838,6 +1945,74 @@ void create_music_page() {
     }
 }
 
+void create_settings_page() {
+    lv_obj_t *page = ui.pages[MOTO_UI_PAGE_SETTINGS];
+    lv_obj_t *title = make_label(page, &lv_font_montserrat_20, kWhite,
+                                  "SETTINGS");
+    lv_obj_set_style_text_letter_space(title, px(2), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, px(34));
+
+    lv_obj_t *brightness_title = make_label(
+        page, &lv_font_montserrat_16, kQuiet, "SCREEN BRIGHTNESS");
+    lv_obj_set_pos(brightness_title, px(25), px(83));
+    lv_obj_t *screen_off_title = make_label(
+        page, &lv_font_montserrat_16, kQuiet, "IDLE SCREEN OFF");
+    lv_obj_set_pos(screen_off_title, px(25), px(193));
+
+    static const char *brightness_labels[4] = {
+        "25%", "50%", "75%", "100%",
+    };
+    static const char *screen_off_labels[4] = {
+        "OFF", "1 MIN", "3 MIN", "5 MIN",
+    };
+    for(int row = 0; row < 2; ++row) {
+        for(int i = 0; i < 4; ++i) {
+            lv_obj_t *button = lv_button_create(page);
+            lv_obj_set_size(button, px(72), px(52));
+            lv_obj_set_pos(button, px(25 + i * 78),
+                           px(row == 0 ? 112 : 222));
+            lv_obj_set_style_radius(button, px(12), 0);
+            lv_obj_set_style_bg_color(button, kGraphite, 0);
+            lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+            lv_obj_set_style_shadow_width(button, 0, 0);
+            lv_obj_set_style_border_width(button, 0, 0);
+            // Keep the selected color stable under LVGL's pressed state.
+            lv_obj_set_style_bg_color(button, kGraphite,
+                                      LV_STATE_PRESSED);
+            lv_obj_set_style_bg_opa(button, LV_OPA_COVER,
+                                    LV_STATE_PRESSED);
+            lv_obj_set_style_radius(button, px(12), LV_STATE_PRESSED);
+            lv_obj_set_style_shadow_width(button, 0, LV_STATE_PRESSED);
+            lv_obj_set_style_border_width(button, 0, LV_STATE_PRESSED);
+            lv_obj_set_style_recolor_opa(button, LV_OPA_TRANSP,
+                                         LV_STATE_PRESSED);
+            lv_obj_set_style_transform_width(button, 0,
+                                             LV_STATE_PRESSED);
+            lv_obj_set_style_transform_height(button, 0,
+                                              LV_STATE_PRESSED);
+            lv_obj_add_flag(button, LV_OBJ_FLAG_GESTURE_BUBBLE);
+            lv_obj_add_event_cb(button, settings_choice_event,
+                                LV_EVENT_CLICKED, nullptr);
+            lv_obj_t *label = make_label(
+                button, &lv_font_montserrat_16, kWhite,
+                row == 0 ? brightness_labels[i] : screen_off_labels[i]);
+            lv_obj_center(label);
+            if(row == 0) {
+                ui.brightness_buttons[i] = button;
+                ui.brightness_button_labels[i] = label;
+            } else {
+                ui.screen_off_buttons[i] = button;
+                ui.screen_off_button_labels[i] = label;
+            }
+        }
+    }
+
+    lv_obj_t *note = make_label(page, &lv_font_montserrat_16, kQuiet,
+                                "AUTO OFF PAUSED IN NAV");
+    lv_obj_align(note, LV_ALIGN_TOP_MID, 0, px(291));
+    update_settings_view();
+}
+
 void set_boot_content_opacity(void *object, int32_t opacity) {
     lv_obj_set_style_opa(static_cast<lv_obj_t *>(object), opacity, 0);
 }
@@ -1944,6 +2119,9 @@ extern "C" void moto_nav_ui_show_power_off_screen(void) {
     }
 
     lv_obj_clean(ui.screen);
+    ui.battery_badge = nullptr;
+    ui.battery_label = nullptr;
+    ui.battery_charge = nullptr;
     lv_obj_set_style_bg_color(ui.screen, LV_COLOR_MAKE(0x00, 0x00, 0x00), 0);
     lv_obj_set_style_bg_opa(ui.screen, LV_OPA_COVER, 0);
 
@@ -1979,7 +2157,9 @@ extern "C" void moto_nav_ui_create(void) {
     create_speed_page();
     create_compass_page();
     create_music_page();
+    create_settings_page();
     create_page_dots();
+    create_battery_badge();
     // Press events are delivered to the topmost object under the finger, not
     // necessarily to its page. Register once across the finished tree so any
     // touch reliably wakes the dots, including the map and music controls.
@@ -2001,7 +2181,9 @@ extern "C" void moto_nav_ui_create(void) {
 
 extern "C" void moto_nav_ui_set_state(const moto_ui_state_t *state) {
     if(state == nullptr || ui.screen == nullptr) return;
-    show_page(state->page);
+    // Settings are local to the device; incoming phone snapshots must not
+    // replace them with the phone's last navigation/music page.
+    if(ui.page != MOTO_UI_PAGE_SETTINGS) show_page(state->page);
     // Hidden pages do not need to be invalidated. Page changes immediately
     // apply a fresh snapshot through PhoneNavBridge, so this keeps every page
     // correct while avoiding three full page redraws per navigation update.
@@ -2010,8 +2192,33 @@ extern "C" void moto_nav_ui_set_state(const moto_ui_state_t *state) {
         case MOTO_UI_PAGE_SPEED: update_speedometer(state); break;
         case MOTO_UI_PAGE_COMPASS: update_compass(state); break;
         case MOTO_UI_PAGE_MUSIC:
+        case MOTO_UI_PAGE_SETTINGS:
         case MOTO_UI_PAGE_COUNT: break;
     }
+}
+
+extern "C" void moto_nav_ui_set_battery_state(
+    const moto_battery_state_t *state) {
+    if(ui.battery_badge == nullptr || ui.battery_label == nullptr ||
+       ui.battery_charge == nullptr) return;
+    if(state == nullptr || !state->available || state->percent > 100) {
+        lv_obj_add_flag(ui.battery_badge, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    char text[8];
+    std::snprintf(text, sizeof(text), "%u%%",
+                  static_cast<unsigned>(state->percent));
+    lv_label_set_text(ui.battery_label, text);
+    lv_obj_set_style_text_color(ui.battery_label,
+                                state->percent <= 20 ? kRed : kWhite, 0);
+    if(state->charging) {
+        lv_obj_align(ui.battery_label, LV_ALIGN_LEFT_MID, px(4), 0);
+        lv_obj_remove_flag(ui.battery_charge, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_center(ui.battery_label);
+        lv_obj_add_flag(ui.battery_charge, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_remove_flag(ui.battery_badge, LV_OBJ_FLAG_HIDDEN);
 }
 
 extern "C" void moto_nav_ui_set_motion_state(const moto_ui_state_t *state) {
@@ -2104,6 +2311,39 @@ extern "C" void moto_nav_ui_set_music_page_enabled(uint8_t enabled) {
         show_page(MOTO_UI_PAGE_NAVIGATION, true);
     }
     update_page_dots();
+}
+
+extern "C" void moto_nav_ui_set_settings_page_enabled(uint8_t enabled) {
+    if(ui.screen == nullptr) return;
+    ui.settings_page_enabled = enabled != 0;
+    if(!ui.settings_page_enabled && ui.page == MOTO_UI_PAGE_SETTINGS) {
+        show_page(MOTO_UI_PAGE_NAVIGATION, true);
+    }
+    update_page_dots();
+}
+
+extern "C" void moto_nav_ui_set_device_settings(
+    uint8_t brightness_percent, uint8_t screen_off_minutes) {
+    if(ui.screen == nullptr) return;
+    for(std::uint8_t value : kBrightnessChoices) {
+        if(value == brightness_percent) {
+            ui.brightness_percent = value;
+            break;
+        }
+    }
+    for(std::uint8_t value : kScreenOffChoices) {
+        if(value == screen_off_minutes) {
+            ui.screen_off_minutes = value;
+            break;
+        }
+    }
+    update_settings_view();
+}
+
+extern "C" void moto_nav_ui_set_settings_change_callback(
+    moto_settings_change_callback_t callback, void *context) {
+    ui.settings_callback = callback;
+    ui.settings_callback_context = context;
 }
 
 extern "C" void moto_nav_ui_set_music_command_callback(

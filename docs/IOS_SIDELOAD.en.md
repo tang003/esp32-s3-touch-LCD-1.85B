@@ -8,9 +8,7 @@ For iPhone users without a Mac or who prefer not to build from source. Requires 
 The project provides an **unsigned IPA** for an installer to re-sign using your own Apple account.
 It is not an App Store or TestFlight package and cannot be installed simply by opening the file.
 
-[Download the sideload preview](https://github.com/mx3353672833-debug/moto-gps-waveshare/releases/tag/v0.3.1-sideload)
-
-Download `MOTO-GPS-0.3.1-6-unsigned.ipa`; use `SHA256SUMS.txt` to verify file integrity.
+[Download the latest successful iPhone build](https://github.com/tang003/esp32-s3-touch-LCD-1.85B/actions/workflows/ios-sideload.yml), then get `MOTO-GPS-unsigned-IPA` from that run's Artifacts section. Version 0.3.2 (7) adds screen brightness and idle screen-off controls. Unzip the artifact and use `SHA256SUMS.txt` to verify the IPA.
 Source and build steps are in this repository. Do not send your Apple password, signing certificate
 or pairing file to the author or other people.
 
