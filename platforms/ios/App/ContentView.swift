@@ -764,7 +764,8 @@ struct ContentView: View {
             allowsMultipleSelection: false
         ) { result in
             switch result {
-            case let .success(url): model.installFirmware(from: url)
+            case let .success(urls):
+                if let url = urls.first { model.installFirmware(from: url) }
             case let .failure(error): model.reportFirmwareFileSelectionError(error)
             }
         }
