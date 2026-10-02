@@ -163,6 +163,42 @@ final class AppModel: ObservableObject {
         deviceSettingsSupported ? device.settings : nil
     }
 
+    var firmwareUpdateSupported: Bool {
+        deviceReady && device.firmwareUpdateSupported
+    }
+
+    func installFirmware(from url: URL) {
+        guard !isNavigationActive, !device.firmwareUpdate.isActive else {
+            bluetooth.reportFirmwareFileError("请先结束导航或当前升级，再选择固件。")
+            return
+        }
+        guard url.pathExtension.lowercased() == "bin" else {
+            bluetooth.reportFirmwareFileError("请选择项目生成的 .bin 固件文件。")
+            return
+        }
+        let hasSecurityAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityAccess { url.stopAccessingSecurityScopedResource() }
+        }
+        do {
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            // Bound memory even if Files points to a much larger document.
+            let image = try handle.read(upToCount: 0x2F0000 + 1) ?? Data()
+            bluetooth.startFirmwareUpdate(image: image, fileName: url.lastPathComponent)
+        } catch {
+            bluetooth.reportFirmwareFileError("无法读取固件文件：\(error.localizedDescription)")
+        }
+    }
+
+    func reportFirmwareFileSelectionError(_ error: Error) {
+        bluetooth.reportFirmwareFileError("无法选择固件文件：\(error.localizedDescription)")
+    }
+
+    func cancelFirmwareUpdate() {
+        bluetooth.cancelFirmwareUpdate()
+    }
+
     func setDeviceBrightness(_ percent: UInt8) {
         guard let current = deviceSettings else { return }
         bluetooth.sendDeviceSettings(
@@ -337,6 +373,10 @@ final class AppModel: ObservableObject {
     }
 
     func startNavigation() {
+        guard !device.firmwareUpdate.isActive else {
+            navigationFailure = "请等待圆屏固件更新完成"
+            return
+        }
         guard !isUpdatingGateway, isGatewayConfigured else {
             navigationFailure = "请先在网关设置中填写服务地址"
             return
@@ -383,7 +423,8 @@ final class AppModel: ObservableObject {
     }
 
     func startDemoNavigation() {
-        guard !isNavigationActive, !isUpdatingGateway else { return }
+        guard !isNavigationActive, !isUpdatingGateway,
+              !device.firmwareUpdate.isActive else { return }
         surroundingMap.reset()
         runtime?.stop()
         let demoSession = DemoNavigationSession()

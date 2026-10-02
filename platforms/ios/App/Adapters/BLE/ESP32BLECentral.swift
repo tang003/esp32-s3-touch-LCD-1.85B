@@ -1,6 +1,8 @@
 @preconcurrency import CoreBluetooth
+import CryptoKit
 import Foundation
 import MotoNavigationCore
+import UIKit
 
 struct BLEDeviceSettings: Equatable {
     let brightnessPercent: UInt8
@@ -24,6 +26,25 @@ struct BLEDeviceSnapshot: Equatable {
     var settings: BLEDeviceSettings?
     var settingsUpdatePending = false
     var settingsError: String?
+    var firmwareUpdateSupported = false
+    var firmwareUpdate: BLEFirmwareUpdate = .idle
+}
+
+enum BLEFirmwareUpdate: Equatable {
+    case idle
+    case preparing(fileName: String)
+    case transferring(fileName: String, acknowledgedBytes: Int, totalBytes: Int)
+    case applying
+    case restarting
+    case completed
+    case failed(message: String)
+
+    var isActive: Bool {
+        switch self {
+        case .preparing, .transferring, .applying: return true
+        case .idle, .restarting, .completed, .failed: return false
+        }
+    }
 }
 
 enum BLECommandDisposition: UInt8 {
@@ -190,6 +211,22 @@ final class ESP32BLECentral: NSObject {
     private static let serviceUUID = CBUUID(string: MotoBLEProtocolCodec.serviceUUIDString())
     private static let phoneToDeviceUUID = CBUUID(string: MotoBLEProtocolCodec.phoneToDeviceUUIDString())
     private static let deviceToPhoneUUID = CBUUID(string: MotoBLEProtocolCodec.deviceToPhoneUUIDString())
+    private static let otaControlUUID = CBUUID(string: "7E57A003-B50C-4B6A-9C57-40A54E8E1000")
+    private static let otaDataUUID = CBUUID(string: "7E57A004-B50C-4B6A-9C57-40A54E8E1000")
+    private static let maximumFirmwareSize = 0x2F0000
+
+    private struct FirmwareSession {
+        let image: Data
+        let fileName: String
+        var acknowledgedBytes = 0
+    }
+
+    private enum FirmwareWrite {
+        case begin
+        case chunk(size: Int)
+        case commit
+        case abort
+    }
 
     var onSnapshotChange: ((BLEDeviceSnapshot) -> Void)?
     var onDeviceCommand: ((MotoBLEDeviceCommand) -> BLECommandDisposition)?
@@ -232,6 +269,14 @@ final class ESP32BLECentral: NSObject {
     private var peripheral: CBPeripheral?
     private var phoneToDeviceCharacteristic: CBCharacteristic?
     private var deviceToPhoneCharacteristic: CBCharacteristic?
+    private var otaControlCharacteristic: CBCharacteristic?
+    private var otaDataCharacteristic: CBCharacteristic?
+    private var firmwareSession: FirmwareSession?
+    private var firmwareWrite: FirmwareWrite?
+    private var firmwareCancelRequested = false
+    private var previousIdleTimerDisabled: Bool?
+    private var firmwareWriteTimeoutTask: Task<Void, Never>?
+    private var firmwareRestartTimeoutTask: Task<Void, Never>?
     private var codec: MotoBLEProtocolCodec?
     private var handshake: BLEHandshakeGate?
     private var pendingNavigationState: MotoNavCoreSnapshot?
@@ -334,6 +379,7 @@ final class ESP32BLECentral: NSObject {
     /// current values arrive; never replay a phone-side default on reconnect.
     func sendDeviceSettings(brightnessPercent: UInt8, screenOffMinutes: UInt8) {
         guard protocolReady,
+              firmwareSession == nil,
               peerCapabilities & MotoBLEProtocolCodec.deviceSettingsCapability() != 0,
               snapshot.settings != nil,
               pendingDeviceSettings == nil,
@@ -370,6 +416,228 @@ final class ESP32BLECentral: NSObject {
             pendingDeviceSettings = nil
             snapshot.settingsUpdatePending = false
             snapshot.settingsError = "设置发送失败，请重试。"
+        }
+    }
+
+    /// A firmware update is deliberately tied to the foreground, encrypted
+    /// connection. One acknowledged GATT write is in flight at a time; the
+    /// device validates the image and digest before changing its boot slot.
+    func startFirmwareUpdate(image: Data, fileName: String) {
+        guard protocolReady,
+              let peripheral,
+              peripheral.state == .connected,
+              let control = otaControlCharacteristic,
+              otaDataCharacteristic != nil,
+              firmwareSession == nil,
+              !writeWithResponseInFlight
+        else {
+            snapshot.firmwareUpdate = .failed(message: "设备尚未准备好升级，请稍后重试。")
+            return
+        }
+        guard !image.isEmpty, image.count <= Self.maximumFirmwareSize else {
+            snapshot.firmwareUpdate = .failed(message: "固件文件为空或超过设备的升级分区容量。")
+            return
+        }
+        guard image.count >= 112, image[0] == 0xE9,
+              image[32 ..< 36].elementsEqual([0x32, 0x54, 0xCD, 0xAB]) else {
+            snapshot.firmwareUpdate = .failed(message: "这不是有效的 ESP32 固件 .bin 文件。")
+            return
+        }
+        let projectName = String(decoding: image[80 ..< 112].prefix(while: { $0 != 0 }), as: UTF8.self)
+        guard projectName == "moto_gps_esp32" else {
+            snapshot.firmwareUpdate = .failed(message: "固件不属于 MOTO GPS 项目，请选择对应 1.85B 的固件。")
+            return
+        }
+        guard image.range(of: Data("MOTO_OTA_TARGET_1_85B_V1".utf8)) != nil else {
+            snapshot.firmwareUpdate = .failed(message: "固件不是为 1.85B 圆屏编译的，请检查板型。")
+            return
+        }
+        guard peripheral.maximumWriteValueLength(for: .withResponse) >= 37 else {
+            snapshot.firmwareUpdate = .failed(message: "当前蓝牙连接的单次传输长度不足，请重新连接设备。")
+            return
+        }
+
+        firmwareRestartTimeoutTask?.cancel()
+        firmwareRestartTimeoutTask = nil
+        previousIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        firmwareSession = FirmwareSession(image: image, fileName: fileName)
+        firmwareCancelRequested = false
+        outboundFrames.removeAll(keepingCapacity: true)
+        writePumpTask?.cancel()
+        writePumpTask = nil
+        mapSceneDelivery.queueWasDiscarded()
+        mapSceneFinalFrame = nil
+        lastRouteGeometrySignature = nil
+        navigationTransmitTask?.cancel()
+        navigationTransmitTask = nil
+        snapshot.firmwareUpdate = .preparing(fileName: fileName)
+
+        var begin = Data([0x01])
+        var byteCount = UInt32(image.count).littleEndian
+        withUnsafeBytes(of: &byteCount) { begin.append(contentsOf: $0) }
+        begin.append(contentsOf: SHA256.hash(data: image))
+        sendFirmwareValue(begin, to: control, awaiting: .begin)
+    }
+
+    func cancelFirmwareUpdate() {
+        guard firmwareSession != nil else { return }
+        firmwareCancelRequested = true
+        if firmwareWrite == nil { sendFirmwareAbort() }
+    }
+
+    func reportFirmwareFileError(_ message: String) {
+        guard firmwareSession == nil else { return }
+        snapshot.firmwareUpdate = .failed(message: message)
+    }
+
+    private func sendFirmwareValue(_ value: Data, to characteristic: CBCharacteristic,
+                                   awaiting write: FirmwareWrite) {
+        guard let peripheral, firmwareWrite == nil else { return }
+        firmwareWrite = write
+        peripheral.writeValue(value, for: characteristic, type: .withResponse)
+        firmwareWriteTimeoutTask?.cancel()
+        firmwareWriteTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(20))
+            guard !Task.isCancelled, let self, self.firmwareWrite != nil else { return }
+            self.failFirmwareUpdate("固件传输超时，请重新连接后重试。", disconnect: true)
+        }
+    }
+
+    private func sendNextFirmwareChunk() {
+        guard let session = firmwareSession,
+              let peripheral,
+              let dataCharacteristic = otaDataCharacteristic,
+              firmwareWrite == nil
+        else { return }
+        if session.acknowledgedBytes == session.image.count {
+            guard let control = otaControlCharacteristic else {
+                failFirmwareUpdate("升级控制通道已断开。", disconnect: true)
+                return
+            }
+            snapshot.firmwareUpdate = .applying
+            sendFirmwareValue(Data([0x02]), to: control, awaiting: .commit)
+            return
+        }
+        let capacity = min(peripheral.maximumWriteValueLength(for: .withResponse) - 4, 178)
+        guard capacity > 0 else {
+            failFirmwareUpdate("当前蓝牙连接无法传输固件数据。", disconnect: true)
+            return
+        }
+        let end = min(session.acknowledgedBytes + capacity, session.image.count)
+        var packet = Data()
+        var offset = UInt32(session.acknowledgedBytes).littleEndian
+        withUnsafeBytes(of: &offset) { packet.append(contentsOf: $0) }
+        packet.append(session.image[session.acknowledgedBytes ..< end])
+        sendFirmwareValue(packet, to: dataCharacteristic,
+                          awaiting: .chunk(size: end - session.acknowledgedBytes))
+    }
+
+    private func sendFirmwareAbort() {
+        guard let control = otaControlCharacteristic, firmwareWrite == nil else { return }
+        sendFirmwareValue(Data([0x03]), to: control, awaiting: .abort)
+    }
+
+    private func handleFirmwareWriteResult(for characteristic: CBCharacteristic, error: Error?) {
+        guard characteristic.service?.uuid == Self.serviceUUID,
+              let write = firmwareWrite else { return }
+        let expectedUUID: CBUUID
+        switch write {
+        case .begin, .commit, .abort:
+            expectedUUID = Self.otaControlUUID
+        case .chunk:
+            expectedUUID = Self.otaDataUUID
+        }
+        guard characteristic.uuid == expectedUUID else { return }
+        firmwareWriteTimeoutTask?.cancel()
+        firmwareWriteTimeoutTask = nil
+        firmwareWrite = nil
+        if let error {
+            failFirmwareUpdate("设备拒绝了固件数据：\(error.localizedDescription)", disconnect: true)
+            return
+        }
+        if firmwareCancelRequested, case .commit = write {
+            // Commit has already succeeded; a late cancellation cannot undo
+            // the boot selection. Report the actual outcome instead.
+            firmwareCancelRequested = false
+        } else if firmwareCancelRequested, case .abort = write {
+            finishFirmwareUpdate()
+            snapshot.firmwareUpdate = .failed(message: "已取消固件更新。")
+            return
+        } else if firmwareCancelRequested {
+            sendFirmwareAbort()
+            return
+        }
+        switch write {
+        case .begin:
+            guard let session = firmwareSession else { return }
+            snapshot.firmwareUpdate = .transferring(
+                fileName: session.fileName, acknowledgedBytes: 0,
+                totalBytes: session.image.count
+            )
+            sendNextFirmwareChunk()
+        case let .chunk(size):
+            guard var session = firmwareSession else { return }
+            let previousPercent = session.acknowledgedBytes * 100 / session.image.count
+            session.acknowledgedBytes += size
+            firmwareSession = session
+            let currentPercent = session.acknowledgedBytes * 100 / session.image.count
+            if currentPercent != previousPercent ||
+                session.acknowledgedBytes == session.image.count
+            {
+                snapshot.firmwareUpdate = .transferring(
+                    fileName: session.fileName,
+                    acknowledgedBytes: session.acknowledgedBytes,
+                    totalBytes: session.image.count
+                )
+            }
+            sendNextFirmwareChunk()
+        case .commit:
+            finishFirmwareUpdate(resumeTransport: false)
+            snapshot.firmwareUpdate = .restarting
+            firmwareRestartTimeoutTask?.cancel()
+            firmwareRestartTimeoutTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled, let self,
+                      self.snapshot.firmwareUpdate == .restarting else { return }
+                self.snapshot.firmwareUpdate = .failed(
+                    message: "固件已写入，但尚未确认设备重新连接。请检查圆屏画面。"
+                )
+                self.flushPendingNavigationState()
+                self.flushPendingMediaState()
+                self.flushPendingMapScene()
+                self.flushWrites()
+            }
+        case .abort:
+            finishFirmwareUpdate()
+            snapshot.firmwareUpdate = .failed(message: "已取消固件更新。")
+        }
+    }
+
+    private func failFirmwareUpdate(_ message: String, disconnect: Bool) {
+        finishFirmwareUpdate(resumeTransport: !disconnect)
+        snapshot.firmwareUpdate = .failed(message: message)
+        if disconnect {
+            recoverFromTransportError(message)
+        }
+    }
+
+    private func finishFirmwareUpdate(resumeTransport: Bool = true) {
+        firmwareWriteTimeoutTask?.cancel()
+        firmwareWriteTimeoutTask = nil
+        firmwareWrite = nil
+        firmwareSession = nil
+        firmwareCancelRequested = false
+        if let previousIdleTimerDisabled {
+            UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled
+            self.previousIdleTimerDisabled = nil
+        }
+        lastValidDeviceFrameAtMs = Self.monotonicMs()
+        if resumeTransport {
+            flushPendingNavigationState()
+            flushPendingMediaState()
+            flushPendingMapScene()
+            flushWrites()
         }
     }
 
@@ -477,12 +745,13 @@ final class ESP32BLECentral: NSObject {
         scheduleGattSetupTimeout(for: candidate)
 
         if let service = candidate.services?.first(where: { $0.uuid == Self.serviceUUID }) {
-            if hasRequiredCharacteristics(service) {
+            if hasRequiredCharacteristics(service), hasFirmwareCharacteristics(service) {
                 configureCharacteristics(from: service, on: candidate)
             } else {
                 trace("using restored navigation service; rediscovering characteristics")
                 candidate.discoverCharacteristics(
-                    [Self.phoneToDeviceUUID, Self.deviceToPhoneUUID],
+                    [Self.phoneToDeviceUUID, Self.deviceToPhoneUUID,
+                     Self.otaControlUUID, Self.otaDataUUID],
                     for: service
                 )
             }
@@ -513,6 +782,12 @@ final class ESP32BLECentral: NSObject {
             characteristics.contains(where: { $0.uuid == Self.deviceToPhoneUUID })
     }
 
+    private func hasFirmwareCharacteristics(_ service: CBService) -> Bool {
+        let characteristics = service.characteristics ?? []
+        return characteristics.contains(where: { $0.uuid == Self.otaControlUUID }) &&
+            characteristics.contains(where: { $0.uuid == Self.otaDataUUID })
+    }
+
     private func configureCharacteristics(
         from service: CBService,
         on candidate: CBPeripheral
@@ -534,6 +809,14 @@ final class ESP32BLECentral: NSObject {
 
         phoneToDeviceCharacteristic = rx
         deviceToPhoneCharacteristic = tx
+        otaControlCharacteristic = characteristics.first(where: {
+            $0.uuid == Self.otaControlUUID && $0.properties.contains(.write)
+        })
+        otaDataCharacteristic = characteristics.first(where: {
+            $0.uuid == Self.otaDataUUID && $0.properties.contains(.write)
+        })
+        snapshot.firmwareUpdateSupported =
+            otaControlCharacteristic != nil && otaDataCharacteristic != nil
         trace("characteristics ready; rx=\(rx.properties.rawValue) tx=\(tx.properties.rawValue) notifying=\(tx.isNotifying)")
 
         if tx.isNotifying {
@@ -634,6 +917,11 @@ final class ESP32BLECentral: NSObject {
                 if let pendingNavigationState {
                     sendNavigationSnapshot(pendingNavigationState)
                 }
+                if snapshot.firmwareUpdate == .restarting {
+                    firmwareRestartTimeoutTask?.cancel()
+                    firmwareRestartTimeoutTask = nil
+                    snapshot.firmwareUpdate = .completed
+                }
                 flushPendingMediaState()
                 flushPendingMapScene()
             }
@@ -708,6 +996,10 @@ final class ESP32BLECentral: NSObject {
     }
 
     private func clearProtocolState() {
+        if firmwareSession != nil {
+            finishFirmwareUpdate(resumeTransport: false)
+            snapshot.firmwareUpdate = .failed(message: "固件传输中断，请重新连接后再试。")
+        }
         gattSetupTimeoutTask?.cancel()
         gattSetupTimeoutTask = nil
         handshakeTask?.cancel()
@@ -730,6 +1022,8 @@ final class ESP32BLECentral: NSObject {
         lastSettingsSequence = nil
         phoneToDeviceCharacteristic = nil
         deviceToPhoneCharacteristic = nil
+        otaControlCharacteristic = nil
+        otaDataCharacteristic = nil
         codec = nil
         handshake = nil
         protocolReady = false
@@ -748,6 +1042,7 @@ final class ESP32BLECentral: NSObject {
         snapshot.settings = nil
         snapshot.settingsUpdatePending = false
         snapshot.settingsError = nil
+        snapshot.firmwareUpdateSupported = false
     }
 
     /// GATT discovery, subscription and write failures cannot recover while the
@@ -824,7 +1119,8 @@ final class ESP32BLECentral: NSObject {
 
     @discardableResult
     private func send(_ frames: [Data]) throws -> Bool {
-        guard phoneToDeviceCharacteristic != nil else { return false }
+        guard phoneToDeviceCharacteristic != nil,
+              firmwareSession == nil else { return false }
         var resetQueuedFrames = false
         if outboundFrames.count + frames.count > 128 {
             // Preserve the newest complete snapshot rather than growing without
@@ -844,6 +1140,7 @@ final class ESP32BLECentral: NSObject {
     }
 
     private func scheduleNavigationTransmit() {
+        guard firmwareSession == nil else { return }
         guard protocolReady,
               codec != nil,
               pendingNavigationState != nil,
@@ -869,6 +1166,7 @@ final class ESP32BLECentral: NSObject {
 
     private func flushPendingNavigationState() {
         guard protocolReady,
+              firmwareSession == nil,
               let codec,
               let state = pendingNavigationState
         else { return }
@@ -923,6 +1221,7 @@ final class ESP32BLECentral: NSObject {
 
     private func flushPendingMediaState() {
         guard protocolReady,
+              firmwareSession == nil,
               let codec,
               let state = pendingMediaState
         else { return }
@@ -937,6 +1236,7 @@ final class ESP32BLECentral: NSObject {
 
     private func flushPendingMapScene() {
         guard protocolReady,
+              firmwareSession == nil,
               peerCapabilities & Self.mapSceneCapability != 0,
               let codec,
               let scene = pendingMapScene,
@@ -988,7 +1288,8 @@ final class ESP32BLECentral: NSObject {
     }
 
     private func flushWrites() {
-        guard let peripheral,
+        guard firmwareSession == nil,
+              let peripheral,
               let characteristic = phoneToDeviceCharacteristic,
               !outboundFrames.isEmpty
         else { return }
@@ -1084,6 +1385,8 @@ final class ESP32BLECentral: NSObject {
                       let codec = self.codec,
                       self.peripheral != nil
                 else { return }
+
+                if self.firmwareSession != nil { continue }
 
                 let now = Self.monotonicMs()
                 guard let sessionElapsed = self.heartbeatClock.elapsedMs(sessionID: self.sessionID, nowMs: now)
@@ -1360,7 +1663,8 @@ extension ESP32BLECentral: @preconcurrency CBPeripheralDelegate {
         }
         trace("navigation service discovered")
         peripheral.discoverCharacteristics(
-            [Self.phoneToDeviceUUID, Self.deviceToPhoneUUID],
+            [Self.phoneToDeviceUUID, Self.deviceToPhoneUUID,
+             Self.otaControlUUID, Self.otaDataUUID],
             for: service
         )
     }
@@ -1562,6 +1866,12 @@ extension ESP32BLECentral: @preconcurrency CBPeripheralDelegate {
     ) {
         guard shouldMaintainConnection, !transportTeardownInProgress,
               peripheral === self.peripheral else { return }
+        if characteristic.uuid == Self.otaControlUUID ||
+            characteristic.uuid == Self.otaDataUUID
+        {
+            handleFirmwareWriteResult(for: characteristic, error: error)
+            return
+        }
         guard characteristic.uuid == Self.phoneToDeviceUUID,
               characteristic.service?.uuid == Self.serviceUUID
         else { return }

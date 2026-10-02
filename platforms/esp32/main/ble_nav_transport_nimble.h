@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 
+#include "ble_ota_receiver.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -22,6 +23,7 @@ class BleNavTransport {
       const moto::ble::ReassembledMessage& message, void* context);
   using LinkCallback = void (*)(bool active, void* context);
   using ReadyCallback = void (*)(void* context);
+  using OtaAllowedCallback = bool (*)(void* context);
 
   BleNavTransport();
   BleNavTransport(const BleNavTransport&) = delete;
@@ -30,10 +32,14 @@ class BleNavTransport {
   void set_callbacks(MessageCallback message_callback,
                      LinkCallback link_callback,
                      ReadyCallback ready_callback,
-                     void* context) noexcept;
+                     void* context,
+                     OtaAllowedCallback ota_allowed_callback = nullptr) noexcept;
   esp_err_t start();
   bool send_message(const moto::ble::Message& message,
                     std::uint8_t frame_flags = 0);
+  bool ota_update_in_progress() const noexcept {
+    return ota_active_.load() || ota_restart_pending_.load();
+  }
 
   // Signature-compatible adapter for PhoneNavBridge::set_sender().
   static bool send_from_bridge(const moto::ble::Message& message,
@@ -93,6 +99,8 @@ class BleNavTransport {
                 std::uint16_t command_id = 0);
   bool accept_ack(const moto::ble::Ack& ack);
   void service_pending_ack(std::uint64_t now_ms);
+  int handle_ota_control(const std::uint8_t* bytes, std::size_t length);
+  int handle_ota_data(const std::uint8_t* bytes, std::size_t length);
   bool notify_frames(const std::vector<moto::ble::Bytes>& frames);
   std::size_t negotiated_frame_size() const noexcept;
 
@@ -101,7 +109,9 @@ class BleNavTransport {
   MessageCallback message_callback_ = nullptr;
   LinkCallback link_callback_ = nullptr;
   ReadyCallback ready_callback_ = nullptr;
+  OtaAllowedCallback ota_allowed_callback_ = nullptr;
   void* callback_context_ = nullptr;
+  BleOtaReceiver ota_receiver_{};
   QueueHandle_t rx_queue_ = nullptr;
   SemaphoreHandle_t tx_mutex_ = nullptr;
   TaskHandle_t rx_task_handle_ = nullptr;
@@ -113,6 +123,8 @@ class BleNavTransport {
   // Written by NimBLE while registering the static GATT table, before the
   // host starts; immutable for the lifetime of the service afterwards.
   std::uint16_t tx_value_handle_ = 0;
+  std::uint16_t ota_control_value_handle_ = 0;
+  std::uint16_t ota_data_value_handle_ = 0;
   std::atomic<std::uint16_t> max_frame_size_{20};
   std::atomic<std::uint16_t> peer_max_frame_size_{20};
   std::atomic<std::uint32_t> connection_epoch_{0};
@@ -126,6 +138,8 @@ class BleNavTransport {
   std::atomic<bool> connected_{false};
   std::atomic<bool> encrypted_{false};
   std::atomic<bool> subscribed_{false};
+  std::atomic<bool> ota_active_{false};
+  std::atomic<bool> ota_restart_pending_{false};
   std::uint8_t own_address_type_ = 0;
   std::uint16_t last_rx_ack_sequence_ = 0;
   std::uint16_t last_rx_ack_command_id_ = 0;

@@ -45,6 +45,8 @@ In `dependencies.lock` LVGL is a relative path under the project root; if a loca
 an absolute path, do not commit your personal paths back to the repository. Do not modify
 `managed_components` by hand to keep the build going.
 
+The firmware now has a factory application and two Bluetooth update slots. The **first update requires a full project USB flash** of the bootloader, partition table, application and initial OTA data. Flashing the application `.bin` alone cannot enable OTA. The new table fixes `storage` at its previous `0x810000` offset, and a normal project flash does not erase it. After that one-time USB flash, use the [Bluetooth update guide](../../docs/OTA_UPDATE.en.md) to select later application `.bin` files from iPhone Files.
+
 ## Backup and flashing
 
 Flashing replaces the factory application and requires the device owner's explicit approval. First

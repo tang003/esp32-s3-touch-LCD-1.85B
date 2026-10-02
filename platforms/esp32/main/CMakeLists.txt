@@ -30,6 +30,7 @@ idf_component_register(
         "app_main.cpp"
         "battery_gauge.cpp"
         "ble_nav_transport_nimble.cpp"
+        "ble_ota_receiver.cpp"
         "${MOTO_BOARD_PORT_SOURCE}"
         "motion_heading_sensor.cpp"
         "phone_nav_bridge.cpp"
@@ -44,6 +45,7 @@ idf_component_register(
         "${MOTO_REPOSITORY_ROOT}/shared/nav_presenter/include"
         "${MOTO_SHARED_UI_INCLUDE}"
     REQUIRES
+        app_update
         esp_timer
         esp_rom
         esp_driver_gpio
@@ -53,6 +55,7 @@ idf_component_register(
         freertos
         log
         lvgl
+        mbedtls
         nvs_flash
         bt
         esp_driver_ledc

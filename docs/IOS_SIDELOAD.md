@@ -6,7 +6,8 @@
 本项目提供 **未签名 IPA**，由安装工具使用你自己的 Apple 账号重新签名。
 它不是 App Store / TestFlight 安装包，也不能直接点开安装。
 
-[下载本仓库最新成功的 iPhone 构建结果](https://github.com/tang003/esp32-s3-touch-LCD-1.85B/actions/workflows/ios-sideload.yml)：打开最新成功的运行记录，在页面下方 Artifacts 下载 `MOTO-GPS-unsigned-IPA`，解压后得到 IPA 与 `SHA256SUMS.txt`。0.3.2（7）开始包含圆屏亮度与熄屏设置；旧版 IPA 不含这项功能。
+[下载本仓库最新成功的 iPhone 构建结果](https://github.com/tang003/esp32-s3-touch-LCD-1.85B/actions/workflows/ios-sideload.yml)：打开最新成功的运行记录，在页面下方 Artifacts 下载 `MOTO-GPS-unsigned-IPA`，解压后得到 IPA 与 `SHA256SUMS.txt`。0.3.3（8）加入圆屏蓝牙固件更新；0.3.2（7）开始包含亮度与熄屏设置。
+蓝牙固件更新需要安装包含该功能的新版 App，并先按[蓝牙更新教程](OTA_UPDATE.md)为圆屏完成一次 USB 升级。
 本仓库构建包含高德电动车路线模式；原项目的旧版 Release 不包含本仓库的新增功能。
 源码和构建方式公开在本仓库；不要向作者或他人提供 Apple 账号密码、签名证书或配对文件。
 

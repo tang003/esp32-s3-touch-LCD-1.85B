@@ -6,6 +6,7 @@
 #include "board_port.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -92,6 +93,10 @@ void update_phone_ready(void* context) {
   static_cast<PhoneNavBridge*>(context)->on_protocol_ready();
 }
 
+bool allow_ota_while_idle(void* context) {
+  return !static_cast<PhoneNavBridge*>(context)->navigation_active();
+}
+
 void update_motion_heading(float heading_rate_dps, std::uint64_t sample_ms,
                            void* context) {
   static_cast<PhoneNavBridge*>(context)->on_imu_sample(heading_rate_dps,
@@ -110,7 +115,8 @@ void demo_tick_task(void* context) {
   }
 }
 
-void power_button_task(void*) {
+void power_button_task(void* context) {
+  auto* transport = static_cast<BleNavTransport*>(context);
   std::uint64_t pressed_since_ms = 0;
   // The AXP2101 needs roughly a one-second press to power the board on, so
   // the task usually starts while the user is still holding PWR. Arm the
@@ -132,6 +138,13 @@ void power_button_task(void*) {
     }
     if (!released_once) {
       // Startup press still in progress; do not start the hold timer.
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+    if (transport != nullptr && transport->ota_update_in_progress()) {
+      // Do not execute software power-off during a firmware transfer. The
+      // bootloader will keep the old image if power is lost regardless.
+      pressed_since_ms = 0;
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
@@ -403,7 +416,8 @@ extern "C" void app_main(void) {
 
   phone_bridge.set_sender(BleNavTransport::send_from_bridge, &transport);
   transport.set_callbacks(receive_phone_message, update_phone_link,
-                          update_phone_ready, &phone_bridge);
+                          update_phone_ready, &phone_bridge,
+                          allow_ota_while_idle);
   const esp_err_t ble_result = transport.start();
   if (ble_result != ESP_OK) {
     ESP_LOGE(kTag, "BLE startup failed; display remains in offline mode: %s",
@@ -430,7 +444,7 @@ extern "C" void app_main(void) {
     ESP_LOGW(kTag, "navigation demo task could not start");
   }
   if (board_port_has_power_button()) {
-    if (xTaskCreate(power_button_task, "moto_power", 3'072, nullptr, 3,
+    if (xTaskCreate(power_button_task, "moto_power", 3'072, &transport, 3,
                     nullptr) != pdPASS) {
       ESP_LOGW(kTag, "PWR long-hold task could not start");
     }
@@ -452,6 +466,25 @@ extern "C" void app_main(void) {
   if (battery_result != ESP_OK) {
     ESP_LOGW(kTag, "battery gauge task could not start: %s",
              esp_err_to_name(battery_result));
+  }
+#endif
+
+#if CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+  // A freshly updated slot is provisional until the display and BLE have
+  // both initialized. Confirm only a healthy boot so the bootloader can
+  // restore the previous image after a failed startup.
+  if (reveal_result == ESP_OK && ble_result == ESP_OK) {
+    const esp_partition_t* const running = esp_ota_get_running_partition();
+    esp_ota_img_states_t image_state{};
+    if (running != nullptr &&
+        esp_ota_get_state_partition(running, &image_state) == ESP_OK &&
+        image_state == ESP_OTA_IMG_PENDING_VERIFY) {
+      const esp_err_t confirmed = esp_ota_mark_app_valid_cancel_rollback();
+      if (confirmed != ESP_OK) {
+        ESP_LOGE(kTag, "could not confirm healthy OTA boot: %s",
+                 esp_err_to_name(confirmed));
+      }
+    }
   }
 #endif
 

@@ -159,6 +159,10 @@ treated as a calibrated true-north compass.
 A long press on the screen no longer starts the on-device demo. The long-press demo behaviour in
 older version records has been removed.
 
+### Bluetooth firmware updates
+
+“My Display” can transfer a project application `.bin` built for the **1.85B** from iPhone Files over Bluetooth. The first upgrade still requires USB flashing of the new dual-slot partition layout; older firmware has no update service. Update while stopped, with stable display power and the app in the foreground. See the [Bluetooth update guide](OTA_UPDATE.en.md) for the file, first flash and recovery steps.
+
 ## 7. Apple Music control
 
 First play a song that the current account can play in the iPhone's system "Music" app and allow MOTO

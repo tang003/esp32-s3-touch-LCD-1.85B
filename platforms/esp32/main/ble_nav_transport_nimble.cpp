@@ -7,6 +7,7 @@
 #include "connection_epoch_gate.hpp"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "host/ble_att.h"
 #include "host/ble_gatt.h"
 #include "host/ble_hs.h"
 #include "host/ble_uuid.h"
@@ -35,10 +36,23 @@ const ble_uuid128_t kRxUuid = BLE_UUID128_INIT(
 const ble_uuid128_t kTxUuid = BLE_UUID128_INIT(
     0x00, 0x10, 0x8e, 0x4e, 0xa5, 0x40, 0x57, 0x9c,
     0x6a, 0x4b, 0x0c, 0xb5, 0x02, 0xa0, 0x57, 0x7e);
+const ble_uuid128_t kOtaControlUuid = BLE_UUID128_INIT(
+    0x00, 0x10, 0x8e, 0x4e, 0xa5, 0x40, 0x57, 0x9c,
+    0x6a, 0x4b, 0x0c, 0xb5, 0x03, 0xa0, 0x57, 0x7e);
+const ble_uuid128_t kOtaDataUuid = BLE_UUID128_INIT(
+    0x00, 0x10, 0x8e, 0x4e, 0xa5, 0x40, 0x57, 0x9c,
+    0x6a, 0x4b, 0x0c, 0xb5, 0x04, 0xa0, 0x57, 0x7e);
 
-ble_gatt_chr_def g_characteristics[3]{};
+ble_gatt_chr_def g_characteristics[5]{};
 ble_gatt_svc_def g_services[2]{};
 std::uint16_t g_rx_value_handle = 0;
+
+std::uint32_t read_le32(const std::uint8_t* bytes) {
+  return static_cast<std::uint32_t>(bytes[0]) |
+         static_cast<std::uint32_t>(bytes[1]) << 8U |
+         static_cast<std::uint32_t>(bytes[2]) << 16U |
+         static_cast<std::uint32_t>(bytes[3]) << 24U;
+}
 
 std::uint64_t monotonic_ms() {
   return static_cast<std::uint64_t>(esp_timer_get_time()) / 1'000U;
@@ -53,10 +67,12 @@ BleNavTransport::BleNavTransport() = default;
 void BleNavTransport::set_callbacks(MessageCallback message_callback,
                                     LinkCallback link_callback,
                                     ReadyCallback ready_callback,
-                                    void* context) noexcept {
+                                    void* context,
+                                    OtaAllowedCallback ota_allowed_callback) noexcept {
   message_callback_ = message_callback;
   link_callback_ = link_callback;
   ready_callback_ = ready_callback;
+  ota_allowed_callback_ = ota_allowed_callback;
   callback_context_ = context;
 }
 
@@ -88,6 +104,13 @@ esp_err_t BleNavTransport::start() {
   if (rx_queue_ == nullptr || tx_mutex_ == nullptr) {
     ESP_LOGE(kTag, "could not allocate BLE queues");
     return ESP_ERR_NO_MEM;
+  }
+
+  result = ota_receiver_.initialize();
+  if (result != ESP_OK) {
+    ESP_LOGE(kTag, "OTA restart timer initialization failed: %s",
+             esp_err_to_name(result));
+    return result;
   }
 
   result = nimble_port_init();
@@ -158,6 +181,20 @@ int BleNavTransport::register_gatt_service() {
   // The handle is written during GATT registration, before host sync.
   g_characteristics[1].val_handle = &tx_value_handle_;
 
+  g_characteristics[2].uuid = &kOtaControlUuid.u;
+  g_characteristics[2].access_cb = gatt_access;
+  g_characteristics[2].arg = this;
+  g_characteristics[2].flags =
+      BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC;
+  g_characteristics[2].val_handle = &ota_control_value_handle_;
+
+  g_characteristics[3].uuid = &kOtaDataUuid.u;
+  g_characteristics[3].access_cb = gatt_access;
+  g_characteristics[3].arg = this;
+  g_characteristics[3].flags =
+      BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC;
+  g_characteristics[3].val_handle = &ota_data_value_handle_;
+
   std::memset(g_services, 0, sizeof(g_services));
   g_services[0].type = BLE_GATT_SVC_TYPE_PRIMARY;
   g_services[0].uuid = &kServiceUuid.u;
@@ -176,12 +213,36 @@ int BleNavTransport::gatt_access(std::uint16_t,
                                  void* argument) {
   auto* self = static_cast<BleNavTransport*>(argument);
   if (self == nullptr || context == nullptr ||
-      context->op != BLE_GATT_ACCESS_OP_WRITE_CHR ||
-      attribute_handle != g_rx_value_handle) {
+      context->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
     return BLE_ATT_ERR_UNLIKELY;
   }
 
   const std::uint16_t length = OS_MBUF_PKTLEN(context->om);
+  if (attribute_handle == self->ota_control_value_handle_ ||
+      attribute_handle == self->ota_data_value_handle_) {
+    if (!self->encrypted_.load() || !self->connected_.load()) {
+      return BLE_ATT_ERR_INSUFFICIENT_ENC;
+    }
+    if (length == 0 || length > kMaximumFrameSize) {
+      return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    std::uint8_t bytes[kMaximumFrameSize]{};
+    std::uint16_t copied = 0;
+    const int flatten_result = ble_hs_mbuf_to_flat(
+        context->om, bytes, sizeof(bytes), &copied);
+    if (flatten_result != 0 || copied != length) {
+      return BLE_ATT_ERR_UNLIKELY;
+    }
+    return attribute_handle == self->ota_control_value_handle_
+               ? self->handle_ota_control(bytes, length)
+               : self->handle_ota_data(bytes, length);
+  }
+  if (attribute_handle != g_rx_value_handle) {
+    return BLE_ATT_ERR_UNLIKELY;
+  }
+  if (self->ota_active_.load()) {
+    return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
+  }
   if (length < moto::ble::kFrameOverhead ||
       length > kMaximumFrameSize) {
     return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
@@ -203,6 +264,59 @@ int BleNavTransport::gatt_access(std::uint16_t,
     return BLE_ATT_ERR_INSUFFICIENT_RES;
   }
   return 0;
+}
+
+int BleNavTransport::handle_ota_control(const std::uint8_t* bytes,
+                                        std::size_t length) {
+  if (bytes == nullptr || length == 0) {
+    return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+  }
+  switch (bytes[0]) {
+    case 0x01: {  // BEGIN: opcode, LE32 image size, SHA-256 of exact .bin.
+      if (length != 37U) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+      if (ota_restart_pending_.load() ||
+          (ota_allowed_callback_ != nullptr &&
+           !ota_allowed_callback_(callback_context_))) {
+        return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
+      }
+      const esp_err_t result = ota_receiver_.begin(read_le32(bytes + 1U),
+                                                    bytes + 5U);
+      ota_active_.store(ota_receiver_.active());
+      return result == ESP_OK ? 0 : BLE_ATT_ERR_VALUE_NOT_ALLOWED;
+    }
+    case 0x02: {  // COMMIT: validate full image, then reboot after ATT ACK.
+      if (length != 1U) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+      const esp_err_t result = ota_receiver_.commit();
+      ota_active_.store(ota_receiver_.active());
+      if (result == ESP_OK) {
+        ota_restart_pending_.store(true);
+        return 0;
+      }
+      ESP_LOGW(kTag, "OTA commit rejected: %s", esp_err_to_name(result));
+      return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
+    }
+    case 0x03:  // ABORT is idempotent, including after an ATT error.
+      if (length != 1U) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+      ota_receiver_.abort();
+      ota_active_.store(false);
+      return 0;
+    default:
+      return BLE_ATT_ERR_VALUE_NOT_ALLOWED;
+  }
+}
+
+int BleNavTransport::handle_ota_data(const std::uint8_t* bytes,
+                                     std::size_t length) {
+  if (bytes == nullptr || length <= 4U) {
+    return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+  }
+  const esp_err_t result = ota_receiver_.write(
+      read_le32(bytes), bytes + 4U, length - 4U);
+  ota_active_.store(ota_receiver_.active());
+  if (result == ESP_OK) return 0;
+  ESP_LOGW(kTag, "OTA chunk rejected: %s", esp_err_to_name(result));
+  return result == ESP_ERR_INVALID_ARG ? BLE_ATT_ERR_INVALID_OFFSET
+                                       : BLE_ATT_ERR_UNLIKELY;
 }
 
 int BleNavTransport::gap_event(ble_gap_event* event, void* argument) {
@@ -246,6 +360,8 @@ int BleNavTransport::gap_event(ble_gap_event* event, void* argument) {
       self->peer_max_frame_size_.store(20);
       self->session_id_.store(0);
       self->connection_epoch_.fetch_add(1);
+      self->ota_receiver_.abort();
+      self->ota_active_.store(false);
       self->advertise();
       return 0;
 
@@ -402,6 +518,10 @@ void BleNavTransport::run_rx_worker() {
       // write wakes this worker while it was blocked in xQueueReceive, refresh
       // the epoch again before deciding whether the packet is stale.
       synchronize_connection_epoch();
+      if (ota_active_.load()) {
+        watchdog_.note_valid_frame(monotonic_ms());
+        continue;
+      }
       if (!epoch_gate.accepts(packet.connection_epoch)) {
         continue;
       }
@@ -575,6 +695,12 @@ void BleNavTransport::run_rx_worker() {
     }
 
     const std::uint64_t now = monotonic_ms();
+    if (ota_active_.load()) {
+      // The phone pauses the normal navigation stream during OTA. Keep the
+      // app-link watchdog from declaring the quiet session stale.
+      watchdog_.note_valid_frame(now);
+      continue;
+    }
     service_pending_ack(now);
 
     bool awaiting_ack = false;

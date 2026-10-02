@@ -1,5 +1,6 @@
 import MotoNavigationCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum MotoScreen: Hashable {
     case routePreview
@@ -12,11 +13,13 @@ struct ContentView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var searchFocused: Bool
     @State private var showsDeviceDetails = false
     @State private var showsMapDownloads = false
     @State private var showsDataUse = false
     @State private var showsGatewaySettings = false
+    @State private var showsFirmwareImporter = false
 
     var body: some View {
         NavigationStack(path: navigationPath) {
@@ -47,6 +50,11 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showsDataUse) { DataUseView() }
         .sheet(isPresented: $showsGatewaySettings) { GatewaySettingsView(model: model) }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background, model.device.firmwareUpdate.isActive {
+                model.cancelFirmwareUpdate()
+            }
+        }
     }
 
     // Derive the stack from the session instead of synchronizing two mutable
@@ -707,6 +715,31 @@ struct ContentView: View {
                         Text("导航时保持亮屏；熄屏后可点击屏幕或按键唤醒。")
                     }
                 }
+                Section {
+                    firmwareUpdateStatus
+                    if model.device.firmwareUpdate.isActive {
+                        Button("取消更新", role: .destructive, action: model.cancelFirmwareUpdate)
+                            .disabled(model.device.firmwareUpdate == .applying)
+                    } else {
+                        Button("从“文件”选择 .bin 固件") {
+                            showsFirmwareImporter = true
+                        }
+                        .disabled(!model.firmwareUpdateSupported || model.isNavigationActive)
+                        .accessibilityIdentifier("device-firmware-update-button")
+                    }
+                } header: {
+                    Text("固件更新")
+                } footer: {
+                    if !model.deviceReady {
+                        Text("连接圆屏后可检查是否支持远程更新。")
+                    } else if !model.firmwareUpdateSupported {
+                        Text("当前设备固件还没有远程更新通道。首次需要用 USB 刷入新版固件，以后可从 iPhone 更新。")
+                    } else if model.isNavigationActive {
+                        Text("请先结束导航，再更新圆屏固件。")
+                    } else {
+                        Text("仅选择为 ESP32-S3-Touch-LCD-1.85B 编译的 .bin。更新时保持圆屏供电、靠近 iPhone，并让 App 留在前台。")
+                    }
+                }
                 Section("定位") {
                     statusRow("搜索位置", symbol: "location", value: searchLocationStatus, color: .secondary)
                     if model.searchLocationStatus == .permissionDenied {
@@ -719,13 +752,62 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { showsDeviceDetails = false }
+                        .disabled(model.device.firmwareUpdate.isActive)
                         .accessibilityIdentifier("device-details-done")
                 }
             }
             .accessibilityIdentifier("device-details-sheet")
         }
+        .fileImporter(
+            isPresented: $showsFirmwareImporter,
+            allowedContentTypes: [UTType(filenameExtension: "bin") ?? .data],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case let .success(url): model.installFirmware(from: url)
+            case let .failure(error): model.reportFirmwareFileSelectionError(error)
+            }
+        }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(model.device.firmwareUpdate.isActive)
+    }
+
+    @ViewBuilder
+    private var firmwareUpdateStatus: some View {
+        switch model.device.firmwareUpdate {
+        case .idle:
+            Label("准备就绪", systemImage: "arrow.down.circle")
+                .foregroundStyle(Color.secondary)
+        case let .preparing(fileName):
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("正在准备：\(fileName)").lineLimit(2)
+            }
+        case let .transferring(fileName, acknowledgedBytes, totalBytes):
+            VStack(alignment: .leading, spacing: 8) {
+                Text("正在发送：\(fileName)").lineLimit(2)
+                ProgressView(value: Double(acknowledgedBytes), total: Double(totalBytes))
+                Text("\(Int(Double(acknowledgedBytes) / Double(totalBytes) * 100))% · \(acknowledgedBytes / 1024) / \(totalBytes / 1024) KB")
+                    .font(.footnote)
+                    .foregroundStyle(Color.secondary)
+                    .monospacedDigit()
+            }
+        case .applying:
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("正在校验并安装，请勿断电…")
+            }
+        case .restarting:
+            Label("固件已写入，等待圆屏重启并重新连接…", systemImage: "arrow.clockwise")
+                .foregroundStyle(.blue)
+        case .completed:
+            Label("圆屏已重新连接，请确认画面正常。", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case let .failed(message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+        }
     }
 
     private var deviceBrightnessSelection: Binding<UInt8> {
